@@ -1,0 +1,161 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import "tailwindcss";
+
+:root {
+  --color-bg-primary:    #14110c;  /* warm near-black */
+  --color-bg-surface:    #1b1813;  /* warm dark surface */
+  --color-border:        #2d2820;  /* warm border */
+  --color-border-hi:     #3a342a;  /* warm highlight border */
+  --color-text-primary:  #f0ebdf;  /* warm cream */
+  --color-text-secondary:#a8a091;  /* secondary warm gray */
+  --color-text-muted:    #9a9282;  /* muted warm gray */
+  --color-text-dim:      #b5b0a2;  /* dim warm gray */
+  --color-accent:        #fb923c;  /* orange-400 */
+  --color-accent-hi:     #fdba74;  /* orange-300 */
+  --color-accent-dim:    rgba(251, 146, 60, 0.12);
+  --color-accent-glow:   rgba(251, 146, 60, 0.06);
+  --color-success:       #5bb797;
+  --color-error:         #d66060;
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Space Grotesk", sans-serif;
+
+  /* AgentsRoom Warm Theme Palette mappings */
+  --color-bg-primary: var(--color-bg-primary);
+  --color-bg-surface: var(--color-bg-surface);
+  --color-border-warm: var(--color-border);
+  --color-border-hi-warm: var(--color-border-hi);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-dim: var(--color-text-dim);
+  --color-accent-warm: var(--color-accent);
+  --color-accent-hi-warm: var(--color-accent-hi);
+}
+
+/* Custom CSS Classes for the AgentsRoom Styled Cards */
+.agentsroom-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 1rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 20%, transparent);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 6%, #1b1813);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+              0 4px 20px color-mix(in srgb, var(--agent-accent, var(--color-accent)) 4%, transparent);
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.agentsroom-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 40%, transparent);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08),
+              0 10px 30px color-mix(in srgb, var(--agent-accent, var(--color-accent)) 12%, transparent);
+}
+
+.agentsroom-card-topline {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2.5px;
+  opacity: 0.9;
+  background: linear-gradient(90deg, transparent, var(--agent-accent, var(--color-accent)), transparent);
+}
+
+.agentsroom-avatar-tile {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 24%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agentsroom-model-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 70%, #f0ebdf);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 25%, transparent);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 12%, transparent);
+}
+
+.agentsroom-tags span {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 75%, #f0ebdf);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 20%, transparent);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 4%, transparent);
+  font-family: var(--font-mono);
+}
+
+.agentsroom-card-footer {
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 15%, transparent);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 2%, transparent);
+}
+
+/* Variant B - Trading Card layout (glowing futuristic corner cut option) */
+.agentsroom-tcard {
+  --cut: 10px;
+  position: relative;
+  clip-path: polygon(0 var(--cut), var(--cut) 0, 100% 0,
+             100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%,
+             0 100%);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 30%, transparent);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 8%, #1b1813);
+  box-shadow: 0 0 30px color-mix(in srgb, var(--agent-accent, var(--color-accent)) 10%, transparent);
+  transition: all 0.3s ease;
+}
+
+.agentsroom-tcard-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    rgba(255, 255, 255, 0.02) 0px, rgba(255, 255, 255, 0.02) 1px,
+    transparent 1px, transparent 3px);
+  clip-path: inherit;
+}
+
+.agentsroom-stat-bar-bg {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.agentsroom-stat-bar-fill {
+  height: 100%;
+  background: var(--agent-accent, var(--color-accent));
+  border-radius: 9999px;
+  transition: width 0.5s ease;
+}
+
+/* Custom Scrollbars to align with Warm Theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-border-hi);
+}

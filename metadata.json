@@ -1,0 +1,6 @@
+{
+  "name": "Research Swarm",
+  "description": "A multi-agent parallel research tool that breaks topics into independent specialist threads and orchestrates a final consolidated synthesis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
