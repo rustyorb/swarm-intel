@@ -606,25 +606,46 @@ export default function App() {
     };
   };
 
-  // Load history, session, and logs from localStorage on mount
+  // Load history, session, and logs from localStorage on mount.
+  // Each item loads independently so one corrupted entry can't block the rest
+  // (a blocked settings load would let the save-effect overwrite stored keys
+  // with defaults).
   useEffect(() => {
     try {
       const storedHistory = localStorage.getItem("research_swarm_history");
       if (storedHistory) {
         setHistory(JSON.parse(storedHistory));
       }
+    } catch (e) {
+      console.error("Failed to load history:", e);
+    }
+    try {
       const storedSession = localStorage.getItem("research_swarm_current_session");
       if (storedSession) {
         const parsedSession = JSON.parse(storedSession);
+        // A reload kills the async loops that drive live sessions; restoring
+        // one mid-flight leaves the UI frozen at that stage with no errors.
+        if (["assembling", "researching", "redteaming", "synthesizing"].includes(parsedSession.status)) {
+          parsedSession.status = "failed";
+          parsedSession.error = "Session was interrupted by a page reload before it finished. Start a new run.";
+        }
         setSession(parsedSession);
         if (parsedSession.topic) {
           setTopic(parsedSession.topic);
         }
       }
+    } catch (e) {
+      console.error("Failed to load session:", e);
+    }
+    try {
       const storedLogs = localStorage.getItem("research_swarm_current_logs");
       if (storedLogs) {
         setLogs(JSON.parse(storedLogs));
       }
+    } catch (e) {
+      console.error("Failed to load logs:", e);
+    }
+    try {
       const storedSettings = localStorage.getItem("research_swarm_settings");
       if (storedSettings) {
         try {
@@ -651,7 +672,7 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.error("Failed to load history or active states:", e);
+      console.error("Failed to load settings:", e);
     }
   }, []);
 

@@ -138,14 +138,14 @@ function extractJSON(text: string): any {
 function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settings: any) {
   let provider = "gemini";
   let model = "gemini-3.5-flash";
-  let apiKey = process.env.GEMINI_API_KEY || "";
+  let apiKey = "";
   let baseUrl = "";
 
   if (settings && settings.modelMapping && settings.modelMapping[taskRole]) {
     const mapping = settings.modelMapping[taskRole];
     provider = mapping.provider || "gemini";
     model = mapping.model || "gemini-3.5-flash";
-    
+
     if (settings.providers && settings.providers[provider]) {
       const prov = settings.providers[provider];
       apiKey = prov.apiKey || "";
@@ -153,8 +153,21 @@ function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settin
     }
   }
 
-  if (provider === "gemini" && !apiKey) {
-    apiKey = process.env.GEMINI_API_KEY || "";
+  // .env fallbacks — browser-stored keys are per-origin (they vanish when the
+  // port changes), so keys in .env are the durable option for every provider.
+  if (!apiKey) {
+    const envKeys: Record<string, string> = {
+      gemini: process.env.GEMINI_API_KEY || "",
+      openrouter: process.env.OPENROUTER_API_KEY || "",
+      openai: process.env.OPENAI_API_KEY || "",
+      anthropic: process.env.ANTHROPIC_API_KEY || "",
+      venice: process.env.VENICE_API_KEY || "",
+    };
+    apiKey = envKeys[provider] || "";
+  }
+  if (!baseUrl) {
+    if (provider === "lmstudio") baseUrl = process.env.LMSTUDIO_BASE_URL || "http://localhost:1234/v1";
+    else if (provider === "ollama") baseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
   }
 
   return { provider, model, apiKey, baseUrl };
