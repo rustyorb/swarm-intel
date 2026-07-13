@@ -606,6 +606,16 @@ export default function App() {
     };
   };
 
+  // Which providers have server-side .env keys — lets the Settings UI enable
+  // model fetching without a browser-entered key.
+  const [envKeys, setEnvKeys] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    fetch("/api/health")
+      .then(r => r.json())
+      .then(data => setEnvKeys(data.env_keys || {}))
+      .catch(() => {});
+  }, []);
+
   // Load history, session, and logs from localStorage on mount.
   // Each item loads independently so one corrupted entry can't block the rest
   // (a blocked settings load would let the save-effect overwrite stored keys
@@ -3074,7 +3084,7 @@ export default function App() {
                               
                               <button
                                 onClick={() => handleFetchModels(key)}
-                                disabled={testingConnection !== null || (!isLocal && !prov.apiKey && key !== "gemini")}
+                                disabled={testingConnection !== null || (!isLocal && !prov.apiKey && key !== "gemini" && !envKeys[key])}
                                 className="px-3 py-1.5 bg-bg-surface hover:bg-bg-primary border border-border-warm hover:border-border-hi-warm text-text-secondary hover:text-text-primary disabled:opacity-50 text-[10px] font-mono font-bold rounded uppercase tracking-wider cursor-pointer flex items-center gap-1.5 transition-all"
                               >
                                 {testingConnection === key ? (
@@ -3100,7 +3110,7 @@ export default function App() {
                                   </label>
                                   <input
                                     type="password"
-                                    placeholder={key === "gemini" ? "Using default GEMINI_API_KEY environment variable if empty" : `Enter your ${displayName} API Key`}
+                                    placeholder={envKeys[key] ? "Using key from server .env — leave empty or override here" : key === "gemini" ? "Using default GEMINI_API_KEY environment variable if empty" : `Enter your ${displayName} API Key`}
                                     value={prov.apiKey}
                                     onChange={(e) => {
                                       const val = e.target.value;

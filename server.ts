@@ -135,6 +135,19 @@ function extractJSON(text: string): any {
   }
 }
 
+// .env keys are the durable option — browser-stored keys are per-origin
+// (host:port) and vanish whenever the port changes.
+function envKeyFor(provider: string): string {
+  const envKeys: Record<string, string> = {
+    gemini: process.env.GEMINI_API_KEY || "",
+    openrouter: process.env.OPENROUTER_API_KEY || "",
+    openai: process.env.OPENAI_API_KEY || "",
+    anthropic: process.env.ANTHROPIC_API_KEY || "",
+    venice: process.env.VENICE_API_KEY || "",
+  };
+  return envKeys[provider] || "";
+}
+
 function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settings: any) {
   let provider = "gemini";
   let model = "gemini-3.5-flash";
@@ -153,17 +166,8 @@ function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settin
     }
   }
 
-  // .env fallbacks — browser-stored keys are per-origin (they vanish when the
-  // port changes), so keys in .env are the durable option for every provider.
   if (!apiKey) {
-    const envKeys: Record<string, string> = {
-      gemini: process.env.GEMINI_API_KEY || "",
-      openrouter: process.env.OPENROUTER_API_KEY || "",
-      openai: process.env.OPENAI_API_KEY || "",
-      anthropic: process.env.ANTHROPIC_API_KEY || "",
-      venice: process.env.VENICE_API_KEY || "",
-    };
-    apiKey = envKeys[provider] || "";
+    apiKey = envKeyFor(provider);
   }
   if (!baseUrl) {
     if (provider === "lmstudio") baseUrl = process.env.LMSTUDIO_BASE_URL || "http://localhost:1234/v1";
@@ -419,18 +423,30 @@ async function startServer() {
   // Parse JSON payloads (support larger payload size for multiple research reports)
   app.use(express.json({ limit: "15mb" }));
 
-  // API Health Endpoint
+  // API Health Endpoint — env_keys reports which providers have server-side
+  // .env keys (booleans only) so the Settings UI can enable fetching.
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", api_key_set: !!apiKey });
+    res.json({
+      status: "ok",
+      api_key_set: !!apiKey,
+      env_keys: {
+        gemini: !!envKeyFor("gemini"),
+        openrouter: !!envKeyFor("openrouter"),
+        openai: !!envKeyFor("openai"),
+        anthropic: !!envKeyFor("anthropic"),
+        venice: !!envKeyFor("venice"),
+      },
+    });
   });
 
   // Fetch Models Endpoint for testing connection and loading available models
   app.post("/api/settings/fetch-models", async (req, res) => {
     try {
-      const { provider, apiKey: provKey, baseUrl } = req.body;
+      const { provider, baseUrl } = req.body;
       if (!provider) {
         return res.status(400).json({ error: "Provider is required." });
       }
+      const provKey = req.body.apiKey || envKeyFor(provider);
 
       let models: string[] = [];
 
