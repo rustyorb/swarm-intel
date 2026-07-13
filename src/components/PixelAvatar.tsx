@@ -8,13 +8,13 @@ interface PixelAvatarProps {
 }
 
 const colorMap: Record<string, { bg: string; pixel: string; border: string }> = {
-  cyan: { bg: "bg-cyan-950/40", pixel: "bg-cyan-400", border: "border-cyan-500/30" },
-  emerald: { bg: "bg-emerald-950/40", pixel: "bg-emerald-400", border: "border-emerald-500/30" },
+  cyan: { bg: "bg-red-950/40", pixel: "bg-red-400", border: "border-red-500/30" },
+  emerald: { bg: "bg-lime-950/40", pixel: "bg-lime-400", border: "border-lime-500/30" },
   rose: { bg: "bg-rose-950/40", pixel: "bg-rose-400", border: "border-rose-500/30" },
   amber: { bg: "bg-amber-950/40", pixel: "bg-amber-400", border: "border-amber-500/30" },
   purple: { bg: "bg-purple-950/40", pixel: "bg-purple-400", border: "border-purple-500/30" },
-  indigo: { bg: "bg-indigo-950/40", pixel: "bg-indigo-400", border: "border-indigo-500/30" },
-  blue: { bg: "bg-blue-950/40", pixel: "bg-blue-400", border: "border-blue-500/30" },
+  indigo: { bg: "bg-violet-950/40", pixel: "bg-violet-400", border: "border-violet-500/30" },
+  blue: { bg: "bg-indigo-950/40", pixel: "bg-indigo-400", border: "border-indigo-500/30" },
   fuchsia: { bg: "bg-fuchsia-950/40", pixel: "bg-fuchsia-400", border: "border-fuchsia-500/30" },
 };
 

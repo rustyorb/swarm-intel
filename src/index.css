@@ -1,27 +1,29 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Press+Start+2P&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 
 :root {
-  --color-bg-primary:    #14110c;  /* warm near-black */
-  --color-bg-surface:    #1b1813;  /* warm dark surface */
-  --color-border:        #2d2820;  /* warm border */
-  --color-border-hi:     #3a342a;  /* warm highlight border */
-  --color-text-primary:  #f0ebdf;  /* warm cream */
-  --color-text-secondary:#a8a091;  /* secondary warm gray */
-  --color-text-muted:    #9a9282;  /* muted warm gray */
-  --color-text-dim:      #b5b0a2;  /* dim warm gray */
-  --color-accent:        #fb923c;  /* orange-400 */
-  --color-accent-hi:     #fdba74;  /* orange-300 */
-  --color-accent-dim:    rgba(251, 146, 60, 0.12);
-  --color-accent-glow:   rgba(251, 146, 60, 0.06);
-  --color-success:       #5bb797;
-  --color-error:         #d66060;
+  /* Crimson Haze — deep crimson accent over purple-cast blacks, cream text */
+  --color-bg-primary:    #120a10;  /* purple-black */
+  --color-bg-surface:    #1a1018;  /* dark plum surface */
+  --color-border:        #30202c;  /* wine border */
+  --color-border-hi:     #402a3a;  /* raised wine border */
+  --color-text-primary:  #f2e9e4;  /* cream */
+  --color-text-secondary:#b3a0ac;  /* mauve gray */
+  --color-text-muted:    #9c8a96;  /* muted mauve */
+  --color-text-dim:      #b7a8b2;  /* dim mauve */
+  --color-accent:        #dd2d4a;  /* deep crimson */
+  --color-accent-hi:     #f75d75;  /* bright crimson */
+  --color-accent-dim:    rgba(221, 45, 74, 0.12);
+  --color-accent-glow:   rgba(221, 45, 74, 0.06);
+  --color-success:       #7bbf6a;
+  --color-error:         #e2703c;
 }
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
   --font-display: "Space Grotesk", sans-serif;
+  --font-pixel: "Press Start 2P", "JetBrains Mono", monospace;
 
   /* AgentsRoom Warm Theme Palette mappings */
   --color-bg-primary: var(--color-bg-primary);
@@ -142,6 +144,149 @@
   background: var(--agent-accent, var(--color-accent));
   border-radius: 9999px;
   transition: width 0.5s ease;
+}
+
+/* RPG Character Sheet Cards — 16-bit agent dossiers */
+.rpg-card {
+  --rpg-clip: polygon(
+    0 12px, 4px 12px, 4px 8px, 8px 8px, 8px 4px, 12px 4px, 12px 0,
+    calc(100% - 12px) 0, calc(100% - 12px) 4px, calc(100% - 8px) 4px,
+    calc(100% - 8px) 8px, calc(100% - 4px) 8px, calc(100% - 4px) 12px, 100% 12px,
+    100% calc(100% - 12px), calc(100% - 4px) calc(100% - 12px),
+    calc(100% - 4px) calc(100% - 8px), calc(100% - 8px) calc(100% - 8px),
+    calc(100% - 8px) calc(100% - 4px), calc(100% - 12px) calc(100% - 4px),
+    calc(100% - 12px) 100%, 12px 100%, 12px calc(100% - 4px), 8px calc(100% - 4px),
+    8px calc(100% - 8px), 4px calc(100% - 8px), 4px calc(100% - 12px), 0 calc(100% - 12px));
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 3px;
+  clip-path: var(--rpg-clip);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 55%, var(--color-border));
+  filter: drop-shadow(0 4px 0 rgba(0, 0, 0, 0.35));
+  transition: transform 0.18s steps(3, end), filter 0.25s ease, background 0.25s ease;
+}
+
+.rpg-card-live:hover {
+  transform: translateY(-3px);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 85%, var(--color-border));
+  filter: drop-shadow(0 7px 0 rgba(0, 0, 0, 0.3))
+          drop-shadow(0 0 14px color-mix(in srgb, var(--agent-accent, var(--color-accent)) 35%, transparent));
+}
+
+.rpg-card-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  clip-path: var(--rpg-clip);
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 7%, var(--color-bg-surface));
+  box-shadow: inset 2px 2px 0 rgba(255, 255, 255, 0.05), inset -2px -2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.rpg-scanlines {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    rgba(255, 255, 255, 0.02) 0px, rgba(255, 255, 255, 0.02) 1px,
+    transparent 1px, transparent 3px);
+}
+
+.rpg-dither {
+  height: 8px;
+  flex-shrink: 0;
+  background:
+    repeating-conic-gradient(
+      color-mix(in srgb, var(--agent-accent, var(--color-accent)) 45%, transparent) 0% 25%,
+      transparent 0% 50%)
+    0 0 / 8px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 25%, transparent);
+}
+
+.rpg-nameplate {
+  font-family: var(--font-pixel);
+  font-size: 9px;
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.55);
+}
+
+.rpg-class {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 70%, var(--color-text-secondary));
+}
+
+.rpg-level {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  padding: 4px 5px;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 75%, var(--color-text-primary));
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 40%, transparent);
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.08), inset -1px -1px 0 rgba(0, 0, 0, 0.4);
+}
+
+.rpg-status {
+  font-family: var(--font-pixel);
+  font-size: 6px;
+  padding: 3px 5px;
+  letter-spacing: 0.06em;
+  border-width: 1px;
+}
+
+.rpg-portrait {
+  flex-shrink: 0;
+  padding: 3px;
+  background: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 10%, var(--color-bg-primary));
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 35%, transparent);
+  box-shadow: inset 1px 1px 0 rgba(0, 0, 0, 0.4), inset -1px -1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.rpg-label {
+  font-family: var(--font-pixel);
+  font-size: 6px;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.rpg-stat-value {
+  font-family: var(--font-pixel);
+  font-size: 8px;
+  color: color-mix(in srgb, var(--agent-accent, var(--color-accent)) 60%, var(--color-text-primary));
+}
+
+.rpg-meter {
+  height: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 22%, transparent);
+  overflow: hidden;
+}
+
+.rpg-meter-xl {
+  height: 10px;
+}
+
+.rpg-meter-fill {
+  height: 100%;
+  background: repeating-linear-gradient(90deg,
+    var(--agent-accent, var(--color-accent)) 0 4px,
+    color-mix(in srgb, var(--agent-accent, var(--color-accent)) 45%, transparent) 4px 6px);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.35);
+  transition: width 0.4s steps(8, end);
+}
+
+.rpg-panel {
+  position: relative;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--color-bg-primary) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--agent-accent, var(--color-accent)) 18%, transparent);
+  box-shadow: inset 2px 2px 0 rgba(0, 0, 0, 0.25);
 }
 
 /* Custom Scrollbars to align with Warm Theme */

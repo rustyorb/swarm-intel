@@ -69,16 +69,16 @@ const SAMPLE_TOPICS = [
 
 const getAgentColorHex = (theme: string): string => {
   const mapping: Record<string, string> = {
-    cyan: "#06b6d4",
-    emerald: "#10b981",
+    cyan: "#e11d48",
+    emerald: "#84cc16",
     rose: "#ec4899",
     amber: "#f59e0b",
     purple: "#a855f7",
-    indigo: "#6366f1",
-    blue: "#0ea5e9",
+    indigo: "#8b5cf6",
+    blue: "#818cf8",
     fuchsia: "#d946ef",
   };
-  return mapping[theme] || "#fb923c";
+  return mapping[theme] || "#dd2d4a";
 };
 
 const getAgentModelBadge = (theme: string): string => {
@@ -114,6 +114,32 @@ const getAgentTags = (role: string): string[] => {
     tags.push("Deep Research", "Strategic");
   }
   return [...new Set(tags)].slice(0, 3);
+};
+
+// Cosmetic RPG character-sheet flavor — deterministic per agent, no functional meaning
+const RPG_STATUS: Record<string, string> = {
+  idle: "READY",
+  working: "ON QUEST",
+  completed: "QUEST DONE",
+  failed: "FALLEN",
+};
+
+const getAgentSheet = (name: string, role: string) => {
+  const s = name + role;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = s.charCodeAt(i) + ((h << 5) - h);
+  }
+  h = Math.abs(h);
+  return {
+    level: 12 + (h % 48),
+    stats: [
+      { label: "INT", value: 8 + ((h >> 3) % 11) },
+      { label: "WIS", value: 8 + ((h >> 7) % 11) },
+      { label: "ARC", value: 8 + ((h >> 11) % 11) },
+      { label: "LCK", value: 8 + ((h >> 15) % 11) },
+    ],
+  };
 };
 
 interface LogEntry {
@@ -1955,6 +1981,7 @@ export default function App() {
 
                   const modelBadge = getAgentModelBadge(colorTheme);
                   const tags = getAgentTags(agent.role);
+                  const sheet = getAgentSheet(agent.name, agent.role);
 
                   return (
                     <div 
@@ -1964,31 +1991,34 @@ export default function App() {
                           setViewingCompletedAgent(agent);
                         }
                       }}
-                      className={`agentsroom-card p-5 flex flex-col shadow-lg transition-all duration-300 relative overflow-hidden ${
-                        isCompleted 
-                          ? "cursor-pointer hover:border-[var(--agent-accent)] hover:scale-[1.02] focus-within:ring-1 focus-within:ring-[var(--agent-accent)] shadow-md" 
-                          : ""
-                      }`}
+                      className={`rpg-card ${isCompleted ? "rpg-card-live cursor-pointer" : ""}`}
                       style={{ "--agent-accent": hexColor } as React.CSSProperties}
                     >
-                      {/* Top Header Row */}
-                      <div className="flex items-start justify-between gap-3 mb-3">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <PixelAvatar name={agent.name} role={agent.role} themeColor={colorTheme} size="sm" />
-                          <div className="min-w-0">
-                            <h4 className="text-xs font-bold text-text-primary truncate font-display">{agent.name}</h4>
-                            <p className="text-[10px] text-text-muted font-mono truncate">{agent.role}</p>
+                      <div className="rpg-card-inner">
+                      <div className="rpg-dither"></div>
+
+                      {/* Header: portrait, nameplate, class, level */}
+                      <div className="flex items-start gap-3 px-4 pt-3.5">
+                        <div className="rpg-portrait">
+                          <PixelAvatar name={agent.name} role={agent.role} themeColor={colorTheme} size="md" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <h4 className="rpg-nameplate truncate">{agent.name}</h4>
+                          <p className="rpg-class truncate mt-1">{agent.role}</p>
+                          <div className="mt-1.5">
+                            <span className={`rpg-status inline-block ${
+                              agent.status === "completed" ? "text-success border-success/30 bg-success/10" :
+                              agent.status === "working" ? "text-accent-warm border-accent-warm/30 bg-accent-warm/10 animate-pulse" :
+                              agent.status === "failed" ? "text-error border-error/30 bg-error/10" :
+                              "text-text-muted border-border-hi-warm bg-bg-primary/60"
+                            }`}>
+                              {RPG_STATUS[agent.status] || agent.status.toUpperCase()}
+                            </span>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <span className={`text-[9px] font-mono font-medium px-2 py-0.5 rounded border transition-all ${
-                            agent.status === "completed" ? "text-success border-success/20 bg-success/5" :
-                            agent.status === "working" ? "text-accent-warm border-accent-warm/20 bg-accent-warm/5 animate-pulse" :
-                            "text-text-muted border-border-warm"
-                          }`}>
-                            {agent.status.toUpperCase()}
-                          </span>
+                        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                          <span className="rpg-level">LV {sheet.level}</span>
                           {session.status === "approval" && session.agents.length > 2 && (
                             <button
                               onClick={(e) => {
@@ -2004,31 +2034,45 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Investigative Focus Segment */}
-                      <p className="text-[11px] text-text-secondary line-clamp-2 leading-relaxed mb-4 italic">
-                        "{agent.investigativeAngle}"
-                      </p>
+                      {/* Ability Score Block */}
+                      <div className="grid grid-cols-4 gap-2 px-4 mt-3">
+                        {sheet.stats.map((stat) => (
+                          <div key={stat.label}>
+                            <div className="flex items-baseline justify-between mb-1">
+                              <span className="rpg-label">{stat.label}</span>
+                              <span className="rpg-stat-value">{stat.value}</span>
+                            </div>
+                            <div className="rpg-meter">
+                              <div className="rpg-meter-fill" style={{ width: `${(stat.value / 20) * 100}%` }}></div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
 
-                      {/* Model Badge Overlay */}
-                      <div className="mb-4">
-                        <span className="inline-block text-[9px] font-mono font-semibold tracking-wider px-1.5 py-0.5 bg-bg-primary border border-border-warm text-text-muted rounded-md uppercase">
-                          System: {modelBadge}
-                        </span>
+                      {/* Quest Log — investigative focus */}
+                      <div className="rpg-panel mx-4 mt-3">
+                        <span className="rpg-label block mb-1.5">QUEST LOG</span>
+                        <p className="text-[11px] text-text-secondary line-clamp-2 leading-relaxed italic">
+                          "{agent.investigativeAngle}"
+                        </p>
+                      </div>
+
+                      {/* Engine line */}
+                      <div className="flex items-center gap-2 px-4 mt-3">
+                        <span className="rpg-label">CORE</span>
+                        <span className="rpg-stat-value uppercase">{modelBadge}</span>
                       </div>
 
                       {/* Progress and Tags Indicator at bottom */}
-                      <div className="mt-auto pt-3 border-t border-border-warm space-y-3">
+                      <div className="mt-auto mx-4 mb-4 pt-3 border-t border-border-warm space-y-3">
                         {session.status !== "approval" ? (
                           <div>
-                            <div className="flex justify-between items-center text-[9px] font-mono text-text-muted mb-1">
-                              <span className="truncate max-w-[120px] uppercase">{prog.statusText}</span>
-                              <span>{prog.percent}%</span>
+                            <div className="flex justify-between items-center mb-1.5">
+                              <span className="rpg-label truncate max-w-[210px]">XP // {prog.statusText}</span>
+                              <span className="rpg-stat-value">{prog.percent}%</span>
                             </div>
-                            <div className="h-1 bg-bg-primary rounded-full overflow-hidden">
-                              <div 
-                                className="h-full bg-[var(--agent-accent)] transition-all duration-300"
-                                style={{ width: `${prog.percent}%` }}
-                              ></div>
+                            <div className="rpg-meter rpg-meter-xl">
+                              <div className="rpg-meter-fill" style={{ width: `${prog.percent}%` }}></div>
                             </div>
                           </div>
                         ) : (
@@ -2102,6 +2146,9 @@ export default function App() {
                             </span>
                           </div>
                         )}
+                      </div>
+
+                      <div className="rpg-scanlines"></div>
                       </div>
                     </div>
                   );
@@ -3062,8 +3109,8 @@ export default function App() {
                             {connectionStatus[key] && (
                               <div className={`p-2.5 rounded-lg border text-[10px] leading-relaxed font-mono ${
                                 connectionStatus[key].success 
-                                  ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400" 
-                                  : "bg-rose-500/5 border-rose-500/20 text-rose-400"
+                                  ? "bg-success/5 border-success/20 text-success"
+                                  : "bg-error/5 border-error/20 text-error"
                               }`}>
                                 {connectionStatus[key].message}
                               </div>

@@ -12,17 +12,17 @@ import { ResearchSession, Agent } from "../types";
 const APP_VERSION = "v2.9.0";
 
 const AGENT_HEX: Record<string, string> = {
-  cyan: "#06b6d4",
-  emerald: "#10b981",
+  cyan: "#e11d48",
+  emerald: "#84cc16",
   rose: "#ec4899",
   amber: "#f59e0b",
   purple: "#a855f7",
-  indigo: "#6366f1",
-  blue: "#0ea5e9",
+  indigo: "#8b5cf6",
+  blue: "#818cf8",
   fuchsia: "#d946ef",
 };
 
-const agentHex = (theme: string): string => AGENT_HEX[theme] || "#fb923c";
+const agentHex = (theme: string): string => AGENT_HEX[theme] || "#dd2d4a";
 
 const DEPTH_LABELS: Record<string, string> = {
   recon: "Recon — Fast tactical brief",
@@ -50,17 +50,17 @@ const DOSSIER_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg: #14110c;
-  --surface: #1b1813;
-  --border: #2d2820;
-  --border-hi: #3a342a;
-  --text: #f0ebdf;
-  --text-2: #a8a091;
-  --muted: #9a9282;
-  --accent: #fb923c;
-  --accent-hi: #fdba74;
-  --success: #5bb797;
-  --error: #d66060;
+  --bg: #120a10;
+  --surface: #1a1018;
+  --border: #30202c;
+  --border-hi: #402a3a;
+  --text: #f2e9e4;
+  --text-2: #b3a0ac;
+  --muted: #9c8a96;
+  --accent: #dd2d4a;
+  --accent-hi: #f75d75;
+  --success: #7bbf6a;
+  --error: #e2703c;
 }
 
 * { box-sizing: border-box; }

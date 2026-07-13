@@ -68,7 +68,7 @@ export default function ReaderMode({ title, markdown, accentHex, onClose }: Read
   const contentRef = useRef<HTMLDivElement>(null);
 
   const toc = useMemo(() => buildToc(markdown), [markdown]);
-  const accent = accentHex || "#fb923c";
+  const accent = accentHex || "#dd2d4a";
 
   // ESC closes the reader.
   useEffect(() => {

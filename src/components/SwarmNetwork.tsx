@@ -12,20 +12,20 @@ interface SwarmNetworkProps {
 }
 
 const AGENT_COLOR_HEX: Record<string, string> = {
-  cyan: "#06b6d4",
-  emerald: "#10b981",
+  cyan: "#e11d48",
+  emerald: "#84cc16",
   rose: "#ec4899",
   amber: "#f59e0b",
   purple: "#a855f7",
-  indigo: "#6366f1",
-  blue: "#0ea5e9",
+  indigo: "#8b5cf6",
+  blue: "#818cf8",
   fuchsia: "#d946ef",
 };
 
-const hexFor = (theme: string): string => AGENT_COLOR_HEX[theme] || "#fb923c";
+const hexFor = (theme: string): string => AGENT_COLOR_HEX[theme] || "#dd2d4a";
 
-const ACCENT = "#fb923c";
-const SUCCESS = "#5bb797";
+const ACCENT = "#dd2d4a";
+const SUCCESS = "#7bbf6a";
 const ERROR = "#d66060";
 const REDTEAM = "#ec4899";
 
@@ -161,7 +161,7 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
             style={{
               background: isRedTeam
                 ? "linear-gradient(135deg, #f9a8d4, #ec4899)"
-                : "linear-gradient(135deg, #fdba74, #fb923c)",
+                : "linear-gradient(135deg, #f75d75, #dd2d4a)",
               boxShadow: isRedTeam
                 ? `0 0 42px ${REDTEAM}aa`
                 : `0 0 ${isSynth ? 42 : 24}px ${ACCENT}${isSynth ? "aa" : "77"}`,

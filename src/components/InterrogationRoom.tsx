@@ -47,7 +47,7 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
   const messages = session.chat ?? [];
   const respondents = session.agents.filter(a => a.report);
   const currentColor = respondent === "panel"
-    ? "#fb923c"
+    ? "#dd2d4a"
     : getAgentColorHex(session.agents.find(a => a.id === respondent)?.colorTheme || "");
 
   useEffect(() => {
@@ -242,7 +242,7 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
                       <div className="flex items-baseline gap-2 mb-1.5">
                         <span
                           className="text-xs font-bold font-display"
-                          style={{ color: agent ? getAgentColorHex(agent.colorTheme) : "#fb923c" }}
+                          style={{ color: agent ? getAgentColorHex(agent.colorTheme) : "#dd2d4a" }}
                         >
                           {m.respondentName}
                         </span>
