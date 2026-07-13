@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import os from "os";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -397,7 +398,7 @@ async function runUniversalStream(
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const BASE_PORT = Number(process.env.PORT) || 3000;
 
   // Parse JSON payloads (support larger payload size for multiple research reports)
   app.use(express.json({ limit: "15mb" }));
@@ -1063,9 +1064,29 @@ RESPONSE REQUIREMENTS:
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  // The base port may already be taken by other local services (Docker
+  // containers, Open WebUI, etc.) — walk upward to the first free port.
+  const listenOn = (port: number, attemptsLeft: number) => {
+    const server = app.listen(port, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${port}`);
+      for (const infos of Object.values(os.networkInterfaces())) {
+        for (const info of infos || []) {
+          if (info.family === "IPv4" && !info.internal) {
+            console.log(`  LAN: http://${info.address}:${port}`);
+          }
+        }
+      }
+    });
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE" && attemptsLeft > 0) {
+        console.log(`Port ${port} is in use — trying ${port + 1}`);
+        listenOn(port + 1, attemptsLeft - 1);
+      } else {
+        throw err;
+      }
+    });
+  };
+  listenOn(BASE_PORT, 20);
 }
 
 startServer();
