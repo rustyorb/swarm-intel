@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { MessagesSquare, Cpu, Send, ChevronDown } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import PixelAvatar from "./PixelAvatar";
 import { ChatMessage, ResearchSession } from "../types";
 
@@ -252,7 +253,7 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
                       <div className="bg-bg-surface border border-border-warm rounded-2xl rounded-tl-md px-4 py-3">
                         {displayContent ? (
                           <div className="text-sm">
-                            <ReactMarkdown components={markdownComponents}>{displayContent}</ReactMarkdown>
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{displayContent}</ReactMarkdown>
                             {isStreamingThis && (
                               <span className="inline-block w-1.5 h-3.5 bg-accent-warm/80 ml-0.5 align-middle animate-pulse" />
                             )}

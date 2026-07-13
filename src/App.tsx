@@ -40,12 +40,18 @@ import {
   Plus,
   UserPlus,
   SlidersHorizontal,
-  MessagesSquare
+  MessagesSquare,
+  FileDown,
+  Printer,
+  BookOpenText
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
 import InterrogationRoom from "./components/InterrogationRoom";
+import ReaderMode from "./components/ReaderMode";
+import { buildDossierHtml } from "./lib/dossier";
 import { Agent, AgentStatus, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
 const SAMPLE_TOPICS = [
@@ -314,6 +320,7 @@ export default function App() {
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const [viewingCompletedAgent, setViewingCompletedAgent] = useState<Agent | null>(null);
+  const [showReader, setShowReader] = useState(false);
   const [regeneratingAgentId, setRegeneratingAgentId] = useState<string | null>(null);
   const [nudgeTexts, setNudgeTexts] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
@@ -371,6 +378,45 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const handleExportDossier = () => {
+    if (!session) return;
+    const html = buildDossierHtml(session);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const safeTitle = session.topic.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 50);
+    link.setAttribute("download", `${safeTitle}_dossier.html`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    addLog("SYSTEM", "Mission dossier compiled and exported as a standalone HTML file.", "success");
+  };
+
+  const handlePrintDossier = () => {
+    if (!session) return;
+    const html = buildDossierHtml(session);
+    const win = window.open("", "_blank");
+    if (!win) {
+      // Popup blocked — fall back to downloading the styled HTML instead.
+      handleExportDossier();
+      addLog("SYSTEM", "Print window was blocked by the browser. Dossier downloaded as HTML instead.", "warning");
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    const triggerPrint = () => win.print();
+    if (win.document.readyState === "complete") {
+      setTimeout(triggerPrint, 350);
+    } else {
+      win.onload = () => setTimeout(triggerPrint, 350);
+    }
+    addLog("SYSTEM", "Paper-ready print view opened. Choose \"Save as PDF\" to archive the dossier.", "system");
   };
 
   const handleApproveAndStartResearch = () => {
@@ -1022,7 +1068,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v2.8.0
+                v2.9.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -1834,7 +1880,22 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => setShowReader(true)}
+                    disabled={activeReportViewerId === "interrogate" || !activeText}
+                    className="h-8 w-8 flex items-center justify-center bg-bg-primary border border-border-warm text-text-secondary hover:text-accent-warm rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Open the active report in distraction-free Reader Mode"
+                  >
+                    <BookOpenText className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={handlePrintDossier}
+                    className="h-8 w-8 flex items-center justify-center bg-bg-primary border border-border-warm text-text-secondary hover:text-accent-warm rounded-lg transition-all cursor-pointer"
+                    title="Open a paper-ready print / Save-as-PDF view of the full dossier"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                  </button>
                   <button
                     onClick={() => handleCopyReport(activeText)}
                     disabled={!activeText}
@@ -1853,14 +1914,25 @@ export default function App() {
                       </>
                     )}
                   </button>
+
+                  <div className="h-6 w-[1px] bg-border-warm mx-0.5"></div>
+
                   <button
                     onClick={() => handleSaveReport(activeText, activeTitle)}
                     disabled={!activeText}
-                    className="h-8 px-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Save report to local storage as .md file"
+                    className="h-8 px-3 bg-bg-primary hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Save the active report as a Markdown (.md) file"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Save Report
+                    Save .md
+                  </button>
+                  <button
+                    onClick={handleExportDossier}
+                    className="h-8 px-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer"
+                    title="Export the entire mission as a styled, standalone HTML dossier"
+                  >
+                    <FileDown className="w-3.5 h-3.5" />
+                    Export Dossier
                   </button>
                 </div>
               </div>
@@ -1894,7 +1966,7 @@ export default function App() {
 
                       {session.synthesizedReport ? (
                         <div className="space-y-4 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
-                          <ReactMarkdown
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}
                             components={{
                               h1: ({ node, ...props }) => <h1 className="text-2xl font-bold text-text-primary mt-8 mb-4 border-b border-border-warm pb-2 font-display" {...props} />,
                               h2: ({ node, ...props }) => <h2 className="text-xl font-semibold text-text-primary mt-6 mb-3 font-display flex items-center gap-2" {...props} />,
@@ -1964,7 +2036,7 @@ export default function App() {
 
                           <div className="space-y-4 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
                             {selectedAgent.report ? (
-                              <ReactMarkdown
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}
                                 components={{
                                   h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-text-primary mt-6 mb-3 border-b border-border-warm pb-1.5 font-display" {...props} />,
                                   h2: ({ node, ...props }) => <h2 className="text-lg font-semibold text-text-primary mt-5 mb-2.5 font-display" {...props} />,
@@ -1976,6 +2048,9 @@ export default function App() {
                                   blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-accent-warm bg-bg-surface p-4 rounded-r-lg italic my-4 text-text-muted" {...props} />,
                                   code: ({ node, ...props }) => <code className="bg-bg-primary text-accent-warm px-1.5 py-0.5 rounded font-mono text-xs border border-border-warm" {...props} />,
                                   pre: ({ node, ...props }) => <pre className="bg-bg-primary p-4 rounded-xl overflow-x-auto border border-border-warm my-4 text-xs font-mono text-text-secondary" {...props} />,
+                                  table: ({ node, ...props }) => <div className="overflow-x-auto my-6"><table className="min-w-full divide-y divide-border-warm border border-border-warm rounded-lg text-xs" {...props} /></div>,
+                                  th: ({ node, ...props }) => <th className="bg-bg-primary px-4 py-2 text-left font-semibold text-text-primary" {...props} />,
+                                  td: ({ node, ...props }) => <td className="px-4 py-2 border-t border-border-warm" {...props} />,
                                 }}
                               >
                                 {selectedAgent.report}
@@ -2096,6 +2171,20 @@ export default function App() {
         </div>
       </footer>
 
+      {/* Distraction-free Reader Mode overlay */}
+      {showReader && activeText && (
+        <ReaderMode
+          title={activeTitle}
+          markdown={activeText}
+          accentHex={
+            activeReportViewerId === "synthesis"
+              ? undefined
+              : getAgentColorHex(session?.agents.find((a) => a.id === activeReportViewerId)?.colorTheme || "")
+          }
+          onClose={() => setShowReader(false)}
+        />
+      )}
+
       {/* Completed Agent Dossier View Modal */}
       {viewingCompletedAgent && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -2157,7 +2246,7 @@ export default function App() {
               <article className="prose prose-invert max-w-none text-text-secondary">
                 <div className="space-y-4 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
                   {viewingCompletedAgent.report ? (
-                    <ReactMarkdown
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}
                       components={{
                         h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-text-primary mt-6 mb-3 border-b border-border-warm pb-1.5 font-display" {...props} />,
                         h2: ({ node, ...props }) => <h2 className="text-lg font-semibold text-text-primary mt-5 mb-2.5 font-display" {...props} />,
@@ -2169,6 +2258,9 @@ export default function App() {
                         blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-accent-warm bg-bg-surface p-4 rounded-r-lg italic my-4 text-text-muted" {...props} />,
                         code: ({ node, ...props }) => <code className="bg-bg-primary text-accent-warm px-1.5 py-0.5 rounded font-mono text-xs border border-border-warm" {...props} />,
                         pre: ({ node, ...props }) => <pre className="bg-bg-primary p-4 rounded-xl overflow-x-auto border border-border-warm my-4 text-xs font-mono text-text-secondary" {...props} />,
+                        table: ({ node, ...props }) => <div className="overflow-x-auto my-6"><table className="min-w-full divide-y divide-border-warm border border-border-warm rounded-lg text-xs" {...props} /></div>,
+                        th: ({ node, ...props }) => <th className="bg-bg-primary px-4 py-2 text-left font-semibold text-text-primary" {...props} />,
+                        td: ({ node, ...props }) => <td className="px-4 py-2 border-t border-border-warm" {...props} />,
                       }}
                     >
                       {viewingCompletedAgent.report}
