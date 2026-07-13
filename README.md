@@ -242,6 +242,7 @@ The app keeps state in the browser under these `localStorage` keys:
 | Version | Feature |
 | --- | --- |
 | v2.6.0 | Mission Control — live animated swarm network visualization (orchestrator hub, agent nodes, packet flows, live progress rings; Grid/Network toggle) |
+| v2.7.0 | Swarm Config — mission parameters (swarm size 3–9, Recon/Standard/Deep depth modes honored by all three pipeline stages), custom specialist recruitment with live avatar preview, and node dismissal at approval |
 
 ---
 

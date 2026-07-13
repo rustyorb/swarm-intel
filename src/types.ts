@@ -13,6 +13,11 @@ export interface Agent {
 
 export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "synthesizing" | "completed" | "failed";
 
+export interface SwarmConfig {
+  agentCount: number;
+  depth: "recon" | "standard" | "deep";
+}
+
 export interface ResearchSession {
   id: string;
   topic: string;
@@ -21,4 +26,5 @@ export interface ResearchSession {
   synthesizedReport?: string;
   status: SessionStatus;
   error?: string;
+  config?: SwarmConfig;
 }

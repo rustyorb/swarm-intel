@@ -35,12 +35,16 @@ import {
   Server,
   Globe,
   Database,
-  Save
+  Save,
+  Minus,
+  Plus,
+  UserPlus,
+  SlidersHorizontal
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
-import { Agent, AgentStatus, ResearchSession, SessionStatus } from "./types";
+import { Agent, AgentStatus, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
 const SAMPLE_TOPICS = [
   "Post-lithium solid-state electrolyte battery market readiness for commercial UAVs (2025-2030).",
@@ -105,6 +109,101 @@ interface LogEntry {
   message: string;
   type: "info" | "success" | "warning" | "system";
   agentColor?: string;
+}
+
+const AGENT_COLOR_PALETTE = ["cyan", "emerald", "rose", "amber", "purple", "indigo", "blue", "fuchsia"];
+
+const DEPTH_OPTIONS: { id: SwarmConfig["depth"]; label: string; desc: string }[] = [
+  { id: "recon", label: "Recon", desc: "Fast tactical brief" },
+  { id: "standard", label: "Standard", desc: "Balanced dossier" },
+  { id: "deep", label: "Deep", desc: "Exhaustive analysis" },
+];
+
+// Pre-launch mission parameter controls (swarm size + research depth).
+// `compact` renders the tighter left-sidebar mirror without descriptions.
+function MissionParameters({
+  config,
+  onChange,
+  compact = false,
+}: {
+  config: SwarmConfig;
+  onChange: (config: SwarmConfig) => void;
+  compact?: boolean;
+}) {
+  const setCount = (next: number) => {
+    onChange({ ...config, agentCount: Math.max(3, Math.min(9, next)) });
+  };
+  const activeDepth = DEPTH_OPTIONS.find((d) => d.id === config.depth) || DEPTH_OPTIONS[1];
+
+  return (
+    <div className={`bg-bg-primary border border-border-warm rounded-xl ${compact ? "p-3" : "p-3.5"}`}>
+      {!compact && (
+        <div className="flex items-center gap-1.5 mb-3 text-[9px] uppercase text-text-muted tracking-widest font-bold font-mono">
+          <SlidersHorizontal className="w-3 h-3 text-accent-warm" />
+          Mission Parameters
+        </div>
+      )}
+      <div className={compact ? "space-y-3" : "grid grid-cols-1 sm:grid-cols-2 gap-4"}>
+        {/* Swarm Size */}
+        <div>
+          <div className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted mb-2">
+            Swarm Size
+          </div>
+          <div className="flex items-center justify-between bg-bg-surface border border-border-warm rounded-lg px-2 py-1.5">
+            <button
+              onClick={() => setCount(config.agentCount - 1)}
+              disabled={config.agentCount <= 3}
+              className="w-6 h-6 rounded-md flex items-center justify-center text-text-secondary hover:text-accent-warm hover:bg-bg-primary transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Decrease swarm size"
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-lg font-mono font-bold text-accent-warm tabular-nums leading-none">
+                {config.agentCount}
+              </span>
+              <span className="text-[8px] font-mono uppercase tracking-widest text-text-muted">nodes</span>
+            </div>
+            <button
+              onClick={() => setCount(config.agentCount + 1)}
+              disabled={config.agentCount >= 9}
+              className="w-6 h-6 rounded-md flex items-center justify-center text-text-secondary hover:text-accent-warm hover:bg-bg-primary transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Increase swarm size"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Research Depth */}
+        <div>
+          <div className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted mb-2">
+            Research Depth
+          </div>
+          <div className="flex items-center gap-1 bg-bg-surface border border-border-warm rounded-lg p-0.5">
+            {DEPTH_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                onClick={() => onChange({ ...config, depth: opt.id })}
+                className={`flex-1 py-1 rounded-md text-[9px] font-mono font-bold uppercase tracking-widest transition-all cursor-pointer border ${
+                  config.depth === opt.id
+                    ? "bg-bg-primary border-border-hi-warm text-accent-warm"
+                    : "border-transparent text-text-muted hover:text-text-secondary"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          {!compact && (
+            <div className="text-[9px] font-mono text-text-muted mt-1.5 pl-0.5">
+              {activeDepth.desc}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const DEFAULT_SETTINGS = {
@@ -224,6 +323,33 @@ export default function App() {
     localStorage.setItem("research_swarm_view_mode", swarmViewMode);
   }, [swarmViewMode]);
 
+  const [swarmConfig, setSwarmConfig] = useState<SwarmConfig>(() => {
+    try {
+      const stored = localStorage.getItem("research_swarm_config");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        return {
+          agentCount: typeof parsed.agentCount === "number" ? Math.max(3, Math.min(9, parsed.agentCount)) : 6,
+          depth: ["recon", "standard", "deep"].includes(parsed.depth) ? parsed.depth : "standard",
+        };
+      }
+    } catch (e) {
+      // Ignore malformed config
+    }
+    return { agentCount: 6, depth: "standard" };
+  });
+
+  useEffect(() => {
+    localStorage.setItem("research_swarm_config", JSON.stringify(swarmConfig));
+  }, [swarmConfig]);
+
+  // Custom specialist recruitment modal (approval stage)
+  const [showRecruitModal, setShowRecruitModal] = useState(false);
+  const [recruitName, setRecruitName] = useState("");
+  const [recruitRole, setRecruitRole] = useState("");
+  const [recruitAngle, setRecruitAngle] = useState("");
+  const [recruitColor, setRecruitColor] = useState("cyan");
+
   const handleCopyReport = (text: string) => {
     if (!text) return;
     navigator.clipboard.writeText(text).then(() => {
@@ -252,6 +378,40 @@ export default function App() {
     setTimeout(() => {
       runParallelResearch(updated);
     }, 0);
+  };
+
+  const handleDismissAgent = (agentId: string) => {
+    if (!session || session.agents.length <= 2) return;
+    const target = session.agents.find(a => a.id === agentId);
+    setSession(prev => prev ? { ...prev, agents: prev.agents.filter(a => a.id !== agentId) } : null);
+    if (target) {
+      addLog("ORCHESTRATOR", `Specialist ${target.name} dismissed from the swarm roster.`, "warning", target.colorTheme);
+    }
+  };
+
+  const handleRecruitSpecialist = () => {
+    if (!session) return;
+    const name = recruitName.trim();
+    const role = recruitRole.trim();
+    const angle = recruitAngle.trim();
+    if (!name || !role || !angle) return;
+
+    const newAgent: Agent = {
+      id: "agent-custom-" + Date.now(),
+      name,
+      role,
+      investigativeAngle: angle,
+      colorTheme: recruitColor,
+      status: "idle",
+    };
+
+    setSession(prev => prev ? { ...prev, agents: [...prev.agents, newAgent] } : null);
+    addLog("ORCHESTRATOR", `Custom specialist ${name} recruited into the active swarm.`, "success", recruitColor);
+    setShowRecruitModal(false);
+    setRecruitName("");
+    setRecruitRole("");
+    setRecruitAngle("");
+    setRecruitColor("cyan");
   };
 
   const handleRegenerateSingleAgent = async (agentId: string) => {
@@ -452,6 +612,7 @@ export default function App() {
       timestamp: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       agents: [],
       status: "assembling",
+      config: swarmConfig,
     };
 
     setSession(newSession);
@@ -462,7 +623,7 @@ export default function App() {
       const response = await fetch("/api/research/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: searchTopic, settings: settings }),
+        body: JSON.stringify({ topic: searchTopic, settings: settings, config: swarmConfig }),
       });
 
       if (!response.ok) {
@@ -596,7 +757,7 @@ export default function App() {
         const response = await fetch("/api/research/agent-run-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings }),
+          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings, config: currentSession.config }),
         });
 
         if (!response.ok) {
@@ -739,7 +900,8 @@ export default function App() {
           agentRole: r.role,
           report: r.report
         })),
-        settings: settings
+        settings: settings,
+        config: currentSession.config
       };
 
       const response = await fetch("/api/research/synthesize-stream", {
@@ -858,7 +1020,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v2.6.0
+                v2.7.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -972,6 +1134,10 @@ export default function App() {
                   {topic.length} chars
                 </div>
               </div>
+
+              {(!session || session.status === "idle" || session.status === "failed") && (
+                <MissionParameters config={swarmConfig} onChange={setSwarmConfig} compact />
+              )}
 
               {(!session || session.status === "idle" || session.status === "failed") && (
                 <button
@@ -1175,6 +1341,10 @@ export default function App() {
                   )}
                 </div>
 
+                <div className="mt-4">
+                  <MissionParameters config={swarmConfig} onChange={setSwarmConfig} />
+                </div>
+
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4 pt-3 border-t border-border-warm">
                   <div className="flex items-center gap-1.5 text-[10px] text-text-muted font-mono">
                     <Activity className="w-3.5 h-3.5 text-accent-warm/70 animate-pulse" />
@@ -1256,6 +1426,14 @@ export default function App() {
                     <h2 className="text-base font-bold text-text-primary italic mt-1 leading-relaxed">
                       "{session.topic}"
                     </h2>
+                    <div className="flex items-center gap-2 mt-2">
+                      <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-bg-primary border border-border-warm text-text-muted">
+                        NODES: <span className="text-accent-warm">{session.config?.agentCount ?? session.agents.length}</span>
+                      </span>
+                      <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-bg-primary border border-border-warm text-text-muted">
+                        DEPTH: <span className="text-accent-warm">{(session.config?.depth ?? "standard").toUpperCase()}</span>
+                      </span>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 bg-bg-primary px-3.5 py-1.5 rounded-xl border border-border-warm font-mono text-[11px]">
                     {session.status === "approval" ? (
@@ -1293,6 +1471,14 @@ export default function App() {
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
+                      <button
+                        onClick={() => setShowRecruitModal(true)}
+                        className="flex-1 md:flex-initial h-9 px-4 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Manually recruit a custom specialist node"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        Recruit Specialist
+                      </button>
                       <button
                         onClick={() => handleInitiateResearch(session.topic)}
                         className="flex-1 md:flex-initial h-9 px-4 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer"
@@ -1403,13 +1589,27 @@ export default function App() {
                           </div>
                         </div>
 
-                        <span className={`text-[9px] font-mono font-medium px-2 py-0.5 rounded border transition-all ${
-                          agent.status === "completed" ? "text-success border-success/20 bg-success/5" :
-                          agent.status === "working" ? "text-accent-warm border-accent-warm/20 bg-accent-warm/5 animate-pulse" :
-                          "text-text-muted border-border-warm"
-                        }`}>
-                          {agent.status.toUpperCase()}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <span className={`text-[9px] font-mono font-medium px-2 py-0.5 rounded border transition-all ${
+                            agent.status === "completed" ? "text-success border-success/20 bg-success/5" :
+                            agent.status === "working" ? "text-accent-warm border-accent-warm/20 bg-accent-warm/5 animate-pulse" :
+                            "text-text-muted border-border-warm"
+                          }`}>
+                            {agent.status.toUpperCase()}
+                          </span>
+                          {session.status === "approval" && session.agents.length > 2 && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDismissAgent(agent.id);
+                              }}
+                              className="w-5 h-5 rounded-md flex items-center justify-center text-text-muted hover:text-error hover:bg-error/10 transition-all cursor-pointer"
+                              title="Dismiss this specialist node"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Investigative Focus Segment */}
@@ -1984,6 +2184,137 @@ export default function App() {
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Recruit Custom Specialist Modal */}
+      {showRecruitModal && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-bg-surface border border-border-warm rounded-2xl flex flex-col overflow-hidden shadow-2xl relative animate-fade-in">
+            {/* Header */}
+            <div className="p-5 border-b border-border-warm flex items-center justify-between bg-bg-primary/50 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <UserPlus className="w-4 h-4 text-accent-warm" />
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider font-mono text-accent-warm">
+                    Recruit Specialist
+                  </h3>
+                  <p className="text-[10px] text-text-muted font-mono mt-0.5">
+                    Manually deploy a custom node into the swarm
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowRecruitModal(false)}
+                className="w-8 h-8 rounded-full border border-border-warm bg-bg-surface text-text-muted hover:text-text-primary flex items-center justify-center transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-5 space-y-4 overflow-y-auto">
+              {/* Live Preview */}
+              <div className="flex items-center gap-3 p-3 bg-bg-primary border border-border-warm rounded-xl">
+                <PixelAvatar
+                  name={recruitName || "New Specialist"}
+                  role={recruitRole || "Investigator"}
+                  themeColor={recruitColor}
+                  size="sm"
+                />
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-text-primary font-display truncate">
+                    {recruitName || "New Specialist"}
+                  </div>
+                  <div className="text-[10px] text-text-muted font-mono truncate">
+                    {recruitRole || "Awaiting role assignment"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Name */}
+              <div>
+                <label className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted block mb-1.5">
+                  Name
+                </label>
+                <input
+                  type="text"
+                  value={recruitName}
+                  onChange={(e) => setRecruitName(e.target.value)}
+                  placeholder="e.g. Dr. Aris Vance"
+                  className="w-full bg-bg-primary text-text-primary placeholder:text-text-muted/50 text-xs px-3 py-2 rounded-lg border border-border-warm focus:outline-none focus:border-accent-warm transition-all font-sans"
+                />
+              </div>
+
+              {/* Role */}
+              <div>
+                <label className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted block mb-1.5">
+                  Role / Specialty
+                </label>
+                <input
+                  type="text"
+                  value={recruitRole}
+                  onChange={(e) => setRecruitRole(e.target.value)}
+                  placeholder="e.g. Cryptographic Analyst"
+                  className="w-full bg-bg-primary text-text-primary placeholder:text-text-muted/50 text-xs px-3 py-2 rounded-lg border border-border-warm focus:outline-none focus:border-accent-warm transition-all font-sans"
+                />
+              </div>
+
+              {/* Investigative Angle */}
+              <div>
+                <label className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted block mb-1.5">
+                  Investigative Angle
+                </label>
+                <textarea
+                  value={recruitAngle}
+                  onChange={(e) => setRecruitAngle(e.target.value)}
+                  placeholder="Describe the specific angle this specialist must investigate..."
+                  className="w-full min-h-[70px] bg-bg-primary text-text-primary placeholder:text-text-muted/50 text-xs px-3 py-2 rounded-lg border border-border-warm focus:outline-none focus:border-accent-warm transition-all font-sans leading-relaxed resize-none"
+                />
+              </div>
+
+              {/* Theme Color */}
+              <div>
+                <label className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted block mb-1.5">
+                  Theme Color
+                </label>
+                <div className="flex flex-wrap gap-2.5">
+                  {AGENT_COLOR_PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setRecruitColor(c)}
+                      title={c}
+                      style={{
+                        backgroundColor: getAgentColorHex(c),
+                        boxShadow: recruitColor === c ? `0 0 0 2px var(--color-bg-surface), 0 0 0 4px ${getAgentColorHex(c)}` : undefined,
+                      }}
+                      className={`w-7 h-7 rounded-lg transition-all cursor-pointer ${
+                        recruitColor === c ? "scale-105" : "opacity-70 hover:opacity-100 hover:scale-110"
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-border-warm bg-bg-surface flex items-center justify-between flex-shrink-0">
+              <button
+                onClick={() => setShowRecruitModal(false)}
+                className="text-[10px] font-mono uppercase tracking-wider text-text-muted hover:text-text-secondary transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRecruitSpecialist}
+                disabled={!recruitName.trim() || !recruitRole.trim() || !recruitAngle.trim()}
+                className="px-5 py-2.5 bg-accent-warm hover:bg-accent-hi-warm disabled:bg-border-warm disabled:text-text-muted text-black text-[10px] font-bold rounded-xl uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shadow-lg shadow-accent-warm/10"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                Deploy Recruit
+              </button>
+            </div>
           </div>
         </div>
       )}

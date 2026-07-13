@@ -507,17 +507,28 @@ async function startServer() {
   // 1. Swarm Assembly Endpoint - Breaks a topic down into 5-7 parallel agents
   app.post("/api/research/initiate", async (req, res) => {
     try {
-      const { topic, settings } = req.body;
+      const { topic, settings, config } = req.body;
       if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
         return res.status(400).json({ error: "A valid research topic is required." });
       }
 
-      console.log(`Assembling research swarm for topic: "${topic}" using custom settings if provided`);
+      const rawCount = config && typeof config.agentCount === "number" ? config.agentCount : 6;
+      const agentCount = Math.max(3, Math.min(9, Math.round(rawCount)));
+      const depth = config && config.depth ? config.depth : "standard";
+
+      let depthHint = "";
+      if (depth === "recon") {
+        depthHint = "\nDEPTH MODE — RECON: Keep each agent's angle tightly scoped and narrowly focused for rapid tactical coverage. Avoid sprawling, open-ended mandates.";
+      } else if (depth === "deep") {
+        depthHint = "\nDEPTH MODE — DEEP: Make each agent's angle maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
+      }
+
+      console.log(`Assembling research swarm for topic: "${topic}" (${agentCount} agents, ${depth} depth)`);
 
       const prompt = `Analyze the user's research topic: "${topic}".
-Break this topic down into 5 to 7 distinct, parallel specialist research perspectives.
+Break this topic down into exactly ${agentCount} distinct, parallel specialist research perspectives.
 For each perspective, design an elite research agent with a unique creative name (e.g. Dr. Aris Vance, Agent Cipher, Investigator Kaelen), a highly specialized role/title (e.g. Cryptographic Analyst, Geopolitical Strategist), a detailed investigative instruction/angle, and a visual theme color.
-Ensure the angles cover the full breadth of the topic from different aspects (e.g. technical engineering, socioeconomic impact, historical context, ethical concerns, futuristic outlook, structural analysis, etc.).`;
+Ensure the angles cover the full breadth of the topic from different aspects (e.g. technical engineering, socioeconomic impact, historical context, ethical concerns, futuristic outlook, structural analysis, etc.).${depthHint}`;
 
       const systemInstruction = "You are an elite Research Swarm Orchestrator. Your task is to break down research requests into cohesive, complementary parallel investigative tracks run by specialized, interesting digital persona agents.";
 
@@ -632,12 +643,14 @@ Ensure the new agent is distinct and does not replicate the other existing agent
   // 2. Agent Research Run Endpoint - Executes a single agent investigation via SSE
   app.post("/api/research/agent-run-stream", async (req, res) => {
     try {
-      const { topic, agent, settings } = req.body;
+      const { topic, agent, settings, config } = req.body;
       if (!topic || !agent) {
         return res.status(400).json({ error: "Topic and agent configuration are required." });
       }
 
-      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}"`);
+      const depth = config && config.depth ? config.depth : "standard";
+
+      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -645,7 +658,41 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       res.flushHeaders();
       res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
 
-      const prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
+      let prompt: string;
+      if (depth === "recon") {
+        prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
+The overarching research project is: "${topic}".
+Your specific investigative assignment is: "${agent.investigativeAngle}".
+
+Deliver a FOCUSED TACTICAL BRIEF of approximately 500-800 words. Be sharp, dense, and high-signal. Cut all filler and padding.
+Structure your response with Markdown:
+- A brief 'Role Perspective' (2-3 sentences on how a ${agent.role} frames this issue).
+- 'Key Findings' as a set of tight, information-rich bullet points.
+- 'Critical Insights' capturing the 2-4 most consequential takeaways.
+
+Utilize web search to ground your points. Write in your persona, first person. Prioritize precision over volume.`;
+      } else if (depth === "deep") {
+        prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
+The overarching research project is: "${topic}".
+Your specific investigative assignment is: "${agent.investigativeAngle}".
+
+Conduct an EXTENSIVE, IN-DEPTH investigation based on your role and instructions. You must think deeply, utilize web searches extensively, and provide a massive, comprehensive professional specialist report. Do not hold back; elaborate significantly on every point.
+Structure your response beautifully with Markdown:
+- Use clear headers.
+- Include a 'Role Perspective' section detailing how a ${agent.role} uniquely views this issue.
+- Include 'Detailed Findings' with robust analysis, structured points, data, and technical breakdowns.
+- Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
+- Include 'Methodology & Data Vectors' detailing what parameters you considered.
+
+DEEP-ANALYSIS REQUIREMENTS (mandatory):
+- Provide QUANTIFIED data, figures, and estimates wherever possible (ranges, magnitudes, timelines, costs).
+- Include AT LEAST ONE Markdown table organizing key data, comparisons, or metrics.
+- Include a 'Scenario Analysis' section modeling best-case, base-case, and worst-case trajectories.
+- Include a 'Contrarian Considerations' section that challenges the prevailing assumptions of your own analysis.
+
+Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
+      } else {
+        prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
 The overarching research project is: "${topic}".
 Your specific investigative assignment is: "${agent.investigativeAngle}".
 
@@ -658,6 +705,7 @@ Structure your response beautifully with Markdown:
 - Include 'Methodology & Data Vectors' detailing what parameters you considered.
 
 Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
+      }
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
@@ -692,12 +740,14 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, reports, settings } = req.body;
+      const { topic, reports, settings, config } = req.body;
       if (!topic || !reports || !Array.isArray(reports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
 
-      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE`);
+      const depth = config && config.depth ? config.depth : "standard";
+
+      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -715,6 +765,13 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
       }
 
       console.log(`Synthesis Context size: ${reportsContext.length} chars`);
+
+      let depthDirective = "";
+      if (depth === "recon") {
+        depthDirective = "\n\nDEPTH DIRECTIVE — RECON: Produce a SHARP EXECUTIVE SYNTHESIS, roughly 40% more concise than a standard report. Prioritize the highest-signal conclusions, trim elaboration, and keep every section tight and decision-oriented.";
+      } else if (depth === "deep") {
+        depthDirective = "\n\nDEPTH DIRECTIVE — DEEP: Maximize retention of technical nuance. Preserve quantified data, edge cases, dissenting views, tables, and scenario analyses surfaced by the specialists. Favor comprehensiveness and analytical rigor over brevity.";
+      }
 
       const prompt = `OVERARCHING TOPIC: "${topic}"
 
@@ -755,7 +812,7 @@ STYLE GUIDELINES:
 - Tone: Academic, rigorous, insightful, and authoritative.
 - Depth: Be extremely detailed. Retain the technical nuances from the specialist reports.
 - Flow: Ensure a smooth narrative transition between sections.
-- Markdown: Use clean, standard Markdown.`;
+- Markdown: Use clean, standard Markdown.${depthDirective}`;
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
