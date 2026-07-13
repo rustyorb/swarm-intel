@@ -191,6 +191,7 @@ All routes are served by `server.ts` on port 3000.
 | `POST` | `/api/research/agent-run-stream` | Run one agent's deep investigation. | SSE |
 | `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. | SSE |
 | `POST` | `/api/research/interrogate-stream` | Answer a follow-up question grounded in the session's reports, as the full panel or a single specialist in persona. | SSE |
+| `POST` | `/api/research/redteam-stream` | VEX adversarial cross-examination of a single specialist report (weaknesses, blind spots, counter-evidence, confidence verdict). | SSE |
 
 The two streaming endpoints emit `data:` events with a `type` field of `ping`, `chunk`, `done`, or `error`. A 5-second `ping` keeps the connection alive during long generations.
 
@@ -247,6 +248,7 @@ The app keeps state in the browser under these `localStorage` keys:
 | v2.8.0 | Interrogation Room — chat with the completed swarm: follow-up questions answered strictly from the reports, streamed live, with respondent selection (Full Panel synthesis voice or any specialist in persona); chats persist with the session |
 | v2.9.0 | Dossier Export Suite — standalone styled HTML dossier export (cover, TOC, roster, all reports, interrogation transcript), print-to-PDF with a light paper theme, and a full-screen Reader Mode with auto-TOC, font sizing, and scroll progress; GFM tables now render everywhere (remark-gfm) |
 | v3.0.0 | Knowledge Library — full-screen searchable archive of every swarm (full-text search with match locations, sort, favorite/depth/chat filters, tags, inline rename, two-step delete, direct dossier export, JSON archive import/export); history cap raised to 50 with favorite-preserving eviction |
+| v3.1.0 | Red Team — optional adversarial critique round: VEX (Chief Adversarial Officer) cross-examines every specialist report live before synthesis (weak evidence, blind spots, counter-evidence, confidence verdicts); the synthesis must rebut or concede each critique in a dedicated Findings & Rebuttals section; live Tribunal UI + rose network-view state + Red Team tab in results |
 
 ---
 

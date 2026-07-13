@@ -44,7 +44,8 @@ import {
   FileDown,
   Printer,
   BookOpenText,
-  LibraryBig
+  LibraryBig,
+  ShieldAlert
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -54,7 +55,9 @@ import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, ResearchSession, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
+
+const REDTEAM_HEX = "#ec4899";
 
 const SAMPLE_TOPICS = [
   "Post-lithium solid-state electrolyte battery market readiness for commercial UAVs (2025-2030).",
@@ -212,6 +215,44 @@ function MissionParameters({
           )}
         </div>
       </div>
+
+      {/* Red Team adversarial toggle */}
+      <div className={compact ? "mt-3" : "mt-4"}>
+        <button
+          onClick={() => onChange({ ...config, redTeam: !config.redTeam })}
+          className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer"
+          title="Toggle an adversarial red-team critique pass before synthesis"
+        >
+          <div className="flex items-center gap-2 min-w-0 text-left">
+            <ShieldAlert
+              className="w-3.5 h-3.5 flex-shrink-0 transition-colors"
+              style={{ color: config.redTeam ? REDTEAM_HEX : undefined }}
+            />
+            <div className="min-w-0">
+              <div
+                className="text-[9px] font-mono uppercase tracking-widest font-bold transition-colors"
+                style={{ color: config.redTeam ? REDTEAM_HEX : undefined }}
+              >
+                Red Team
+              </div>
+              {!compact && (
+                <div className="text-[9px] font-mono text-text-muted mt-0.5">
+                  Adversarial critique pass before synthesis
+                </div>
+              )}
+            </div>
+          </div>
+          <span
+            className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${config.redTeam ? "" : "bg-border-warm"}`}
+            style={config.redTeam ? { background: REDTEAM_HEX } : undefined}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary transition-transform"
+              style={{ transform: config.redTeam ? "translateX(16px)" : "translateX(0)" }}
+            />
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -327,6 +368,8 @@ export default function App() {
   const [regeneratingAgentId, setRegeneratingAgentId] = useState<string | null>(null);
   const [nudgeTexts, setNudgeTexts] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+  const [redTeamCurrentAgentId, setRedTeamCurrentAgentId] = useState<string | null>(null);
+  const [redTeamStreamingCritique, setRedTeamStreamingCritique] = useState("");
   const [swarmViewMode, setSwarmViewMode] = useState<"grid" | "network">(
     () => (localStorage.getItem("research_swarm_view_mode") as "grid" | "network") || "network"
   );
@@ -971,6 +1014,104 @@ export default function App() {
       return;
     }
 
+    // Optional adversarial Red Team pass: VEX cross-examines each specialist report before synthesis.
+    const critiques: RedTeamCritique[] = [];
+    if (currentSession.config?.redTeam) {
+      setSession(prev => prev ? { ...prev, status: "redteaming" as SessionStatus } : null);
+      addLog("ORCHESTRATOR", "Deploying VEX adversarial review...", "system");
+
+      for (const vr of validReports) {
+        const agentObj = agents.find(a => a.id === vr.agentId);
+        setRedTeamCurrentAgentId(vr.agentId);
+        setRedTeamStreamingCritique("");
+        addLog("VEX", `Cross-examining ${vr.name} [${vr.role}]...`, "info", "rose");
+
+        try {
+          const response = await fetch("/api/research/redteam-stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topic: currentSession.topic,
+              agent: { id: vr.agentId, name: vr.name, role: vr.role, investigativeAngle: agentObj?.investigativeAngle || "" },
+              report: vr.report,
+              settings: settings,
+              config: currentSession.config,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error("Adversarial review thread failed.");
+          }
+
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let critiqueText = "";
+          let buffer = "";
+
+          if (reader) {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                const remaining = buffer.trim();
+                if (remaining && remaining.startsWith("data: ")) {
+                  try {
+                    const data = JSON.parse(remaining.slice(6));
+                    if (data.type === "chunk" && data.text) {
+                      critiqueText += data.text;
+                    } else if (data.type === "error") {
+                      throw new Error(data.error);
+                    }
+                  } catch (e) {
+                    // Ignore
+                  }
+                }
+                break;
+              }
+              buffer += decoder.decode(value, { stream: true });
+
+              let newlineIndex;
+              while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
+                const lineText = buffer.slice(0, newlineIndex).trim();
+                buffer = buffer.slice(newlineIndex + 1);
+
+                if (lineText.startsWith("data: ")) {
+                  try {
+                    const data = JSON.parse(lineText.slice(6));
+                    if (data.type === "chunk" && data.text) {
+                      critiqueText += data.text;
+                      setRedTeamStreamingCritique(critiqueText);
+                    } else if (data.type === "error") {
+                      throw new Error(data.error);
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                }
+              }
+            }
+          }
+
+          if (!critiqueText.trim()) {
+            throw new Error("Empty cross-examination returned.");
+          }
+
+          critiques.push({ agentId: vr.agentId, agentName: vr.name, agentRole: vr.role, critique: critiqueText });
+          // Progressively surface critiques so the tribunal UI and Red Team tab stream live.
+          setSession(prev => prev ? { ...prev, critiques: [...critiques] } : null);
+          addLog("VEX", `Verdict rendered on ${vr.name}'s report.`, "info", "rose");
+        } catch (err: any) {
+          addLog("VEX", `Cross-examination of ${vr.name} skipped: ${err.message}`, "warning", "rose");
+        }
+
+        // Brief settle delay between adversarial reviews.
+        await new Promise(r => setTimeout(r, 800));
+      }
+
+      setRedTeamCurrentAgentId(null);
+      setRedTeamStreamingCritique("");
+      addLog("ORCHESTRATOR", "Adversarial review complete. Handing critiques to synthesis...", "system");
+    }
+
     // Trigger synthesis
     setSession(prev => {
       if (!prev) return null;
@@ -979,7 +1120,7 @@ export default function App() {
     setTimeout(() => {
       setSession(prev => {
         if (prev) {
-          runSynthesis(prev, validReports);
+          runSynthesis(prev, validReports, critiques);
         }
         return prev;
       });
@@ -987,7 +1128,7 @@ export default function App() {
   };
 
   // Synthesis Call
-  const runSynthesis = async (currentSession: ResearchSession, compiledReports: any[]) => {
+  const runSynthesis = async (currentSession: ResearchSession, compiledReports: any[], critiques: RedTeamCritique[] = []) => {
     addLog("ORCHESTRATOR", `Synthesizing ${compiledReports.length} incoming channels. Reconciling conflicting parameters...`, "system");
     
     // Stabilize and allow rate limits to settle after sequential agent runs
@@ -1002,6 +1143,11 @@ export default function App() {
           agentName: r.name,
           agentRole: r.role,
           report: r.report
+        })),
+        critiques: critiques.map(c => ({
+          agentName: c.agentName,
+          agentRole: c.agentRole,
+          critique: c.critique
         })),
         settings: settings,
         config: currentSession.config
@@ -1084,6 +1230,7 @@ export default function App() {
         ...currentSession,
         synthesizedReport: finalReport,
         status: "completed",
+        ...(critiques.length ? { critiques } : {}),
       };
 
       setSession(finalSession);
@@ -1104,6 +1251,7 @@ export default function App() {
     }, 0);
     const average = total / session.agents.length;
 
+    if (session.status === "redteaming") return 92;
     if (session.status === "synthesizing") return 95;
     if (session.status === "completed") return 100;
     return Math.round(average);
@@ -1123,7 +1271,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v3.0.0
+                v3.1.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -1134,9 +1282,10 @@ export default function App() {
           <div className="text-right hidden sm:block">
             <div className="text-[10px] text-text-muted uppercase tracking-widest font-mono font-medium">Orchestrator Status</div>
             <div className="flex items-center gap-2 justify-end">
-              <span className={`w-2 h-2 rounded-full ${session?.status === "researching" || session?.status === "synthesizing" ? "bg-amber-400 animate-pulse" : session?.status === "completed" ? "bg-accent-warm" : "bg-border-warm"}`}></span>
+              <span className={`w-2 h-2 rounded-full ${session?.status === "researching" || session?.status === "redteaming" || session?.status === "synthesizing" ? "bg-amber-400 animate-pulse" : session?.status === "completed" ? "bg-accent-warm" : "bg-border-warm"}`}></span>
               <span className="text-[11px] font-mono font-semibold tracking-tight text-text-muted">
                 {session?.status === "researching" && "DISTRIBUTING_WORKLOAD"}
+                {session?.status === "redteaming" && "ADVERSARIAL_REVIEW"}
                 {session?.status === "synthesizing" && "COMPILING_SYNTHESIS"}
                 {session?.status === "completed" && "NOMINAL_STABLE"}
                 {session?.status === "failed" && "FAUL_ENCOUNTERED"}
@@ -1244,7 +1393,7 @@ export default function App() {
                   id="topic-textarea"
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  disabled={session?.status === "assembling" || session?.status === "researching" || session?.status === "synthesizing"}
+                  disabled={session?.status === "assembling" || session?.status === "researching" || session?.status === "redteaming" || session?.status === "synthesizing"}
                   placeholder="Enter a deep scientific, technological, or social challenge topic..."
                   className="w-full min-h-[100px] bg-bg-primary border border-border-warm focus:border-border-hi-warm text-text-primary placeholder-text-muted rounded-xl p-3.5 text-xs font-sans leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-border-hi-warm transition-all"
                 />
@@ -1326,7 +1475,7 @@ export default function App() {
                 <div className="bg-bg-primary/60 border border-border-warm p-3 rounded-lg">
                   <div className="text-[9px] text-text-muted font-mono font-medium tracking-wider mb-1 uppercase">Compiling Rate</div>
                   <div className="text-base font-mono font-bold text-text-primary">
-                    {session.status === "completed" ? "FINISHED" : session.status === "synthesizing" ? "COMPILING" : "PARALLEL_RUN"}
+                    {session.status === "completed" ? "FINISHED" : session.status === "synthesizing" ? "COMPILING" : session.status === "redteaming" ? "RED_TEAM" : "PARALLEL_RUN"}
                   </div>
                 </div>
               </div>
@@ -1540,7 +1689,7 @@ export default function App() {
           )}
 
           {/* Swarm Running / Assembly Screen */}
-          {session && (session.status === "assembling" || session.status === "approval" || session.status === "researching" || session.status === "synthesizing") && (
+          {session && (session.status === "assembling" || session.status === "approval" || session.status === "researching" || session.status === "redteaming" || session.status === "synthesizing") && (
             <div className="flex-1 flex flex-col p-6 overflow-y-auto">
               {/* Header section */}
               <div className="border border-border-warm rounded-2xl bg-bg-surface p-6 mb-6">
@@ -1564,6 +1713,8 @@ export default function App() {
                   <div className="flex items-center gap-2 flex-shrink-0 bg-bg-primary px-3.5 py-1.5 rounded-xl border border-border-warm font-mono text-[11px]">
                     {session.status === "approval" ? (
                       <ShieldCheck className="text-accent-warm w-3.5 h-3.5" />
+                    ) : session.status === "redteaming" ? (
+                      <ShieldAlert className="w-3.5 h-3.5" style={{ color: REDTEAM_HEX }} />
                     ) : (
                       <Clock className="w-3.5 h-3.5 text-accent-warm animate-spin" style={{ animationDuration: "3s" }} />
                     )}
@@ -1571,6 +1722,7 @@ export default function App() {
                       {session.status === "assembling" && "ASSEMBLING_SWARM"}
                       {session.status === "approval" && "AWAITING_APPROVAL"}
                       {session.status === "researching" && "RUNNING_CHANNELS"}
+                      {session.status === "redteaming" && "RED_TEAM_REVIEW"}
                       {session.status === "synthesizing" && "COMPILING_REPORTS"}
                     </span>
                   </div>
@@ -1626,12 +1778,126 @@ export default function App() {
                 )}
               </div>
 
+              {/* Red Team Tribunal — live adversarial cross-examination */}
+              {session.status === "redteaming" && (() => {
+                const critiqueAgents = session.agents.filter(a => a.status === "completed");
+                const currentAgent = session.agents.find(a => a.id === redTeamCurrentAgentId);
+                const doneIds = new Set((session.critiques || []).map(c => c.agentId));
+                return (
+                  <div
+                    className="mb-6 rounded-2xl border bg-bg-surface p-5 relative overflow-hidden"
+                    style={{ borderColor: `${REDTEAM_HEX}66` }}
+                  >
+                    <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: REDTEAM_HEX }} />
+
+                    {/* VEX identity block */}
+                    <div className="flex items-center gap-3 mb-4">
+                      <div
+                        className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+                        style={{ background: `${REDTEAM_HEX}1a`, border: `1px solid ${REDTEAM_HEX}55` }}
+                      >
+                        <ShieldAlert className="w-6 h-6" style={{ color: REDTEAM_HEX }} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-bold font-display" style={{ color: REDTEAM_HEX }}>VEX</h3>
+                          <span
+                            className="text-[9px] font-mono uppercase tracking-widest font-bold px-2 py-0.5 rounded-md"
+                            style={{ color: REDTEAM_HEX, background: `${REDTEAM_HEX}12`, border: `1px solid ${REDTEAM_HEX}33` }}
+                          >
+                            Red Team Tribunal
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-text-muted font-mono">Chief Adversarial Officer</p>
+                      </div>
+                    </div>
+
+                    {/* Cross-examining ticker */}
+                    <div className="flex items-center gap-2 mb-4 text-[10px] font-mono uppercase tracking-widest font-bold">
+                      <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: REDTEAM_HEX }} />
+                      <span style={{ color: REDTEAM_HEX }}>
+                        CROSS-EXAMINING: {currentAgent ? currentAgent.name : "STANDBY"}
+                      </span>
+                    </div>
+
+                    {/* Per-agent review chips */}
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {critiqueAgents.map(a => {
+                        const isDone = doneIds.has(a.id);
+                        const isReviewing = a.id === redTeamCurrentAgentId && !isDone;
+                        return (
+                          <span
+                            key={a.id}
+                            className="text-[9px] font-mono uppercase tracking-wider px-2 py-1 rounded-md flex items-center gap-1.5 border"
+                            style={
+                              isDone
+                                ? { color: REDTEAM_HEX, borderColor: `${REDTEAM_HEX}44`, background: `${REDTEAM_HEX}10` }
+                                : isReviewing
+                                ? { color: REDTEAM_HEX, borderColor: `${REDTEAM_HEX}66`, background: `${REDTEAM_HEX}1a` }
+                                : undefined
+                            }
+                          >
+                            {isDone ? (
+                              <Check className="w-2.5 h-2.5" />
+                            ) : isReviewing ? (
+                              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: REDTEAM_HEX }} />
+                            ) : (
+                              <span className="w-1.5 h-1.5 rounded-full bg-text-muted" />
+                            )}
+                            <span className={isDone || isReviewing ? "" : "text-text-muted"}>{a.name}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    {/* Current critique streaming live */}
+                    <div
+                      className="rounded-xl border p-4 bg-bg-primary/40 max-h-[380px] overflow-y-auto"
+                      style={{ borderColor: `${REDTEAM_HEX}33` }}
+                    >
+                      {redTeamStreamingCritique ? (
+                        <div className="space-y-3 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-text-primary mt-4 mb-2 font-display" {...props} />,
+                              h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-4 mb-2 font-display" style={{ color: REDTEAM_HEX }} {...props} />,
+                              h3: ({ node, ...props }) => <h3 className="text-sm font-semibold mt-3 mb-1.5 font-display" style={{ color: REDTEAM_HEX }} {...props} />,
+                              p: ({ node, ...props }) => <p className="mb-3 leading-relaxed text-text-secondary text-xs sm:text-sm" {...props} />,
+                              ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-3 space-y-1" {...props} />,
+                              ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-3 space-y-1" {...props} />,
+                              li: ({ node, ...props }) => <li className="text-text-secondary text-xs sm:text-sm" {...props} />,
+                              blockquote: ({ node, ...props }) => (
+                                <blockquote
+                                  className="border-l-4 bg-bg-surface p-3 rounded-r-lg italic my-3 text-text-muted"
+                                  style={{ borderColor: REDTEAM_HEX }}
+                                  {...props}
+                                />
+                              ),
+                              strong: ({ node, ...props }) => <strong className="font-bold text-text-primary" {...props} />,
+                              code: ({ node, ...props }) => <code className="bg-bg-primary px-1.5 py-0.5 rounded font-mono text-xs border border-border-warm" style={{ color: REDTEAM_HEX }} {...props} />,
+                            }}
+                          >
+                            {redTeamStreamingCritique}
+                          </ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-[11px] font-mono text-text-muted">
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" style={{ color: REDTEAM_HEX }} />
+                          Compiling adversarial cross-examination...
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Grid of active research specialists */}
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest font-mono">
                   Swarm Agents Status ({session.agents.length})
                 </h3>
-                {(session.status === "researching" || session.status === "synthesizing") && (
+                {(session.status === "researching" || session.status === "redteaming" || session.status === "synthesizing") && (
                   <div className="flex items-center gap-1 bg-bg-surface border border-border-warm rounded-lg p-0.5">
                     <button
                       onClick={() => setSwarmViewMode("grid")}
@@ -1657,7 +1923,7 @@ export default function App() {
                 )}
               </div>
 
-              {swarmViewMode === "network" && (session.status === "researching" || session.status === "synthesizing") ? (
+              {swarmViewMode === "network" && (session.status === "researching" || session.status === "redteaming" || session.status === "synthesizing") ? (
                 <SwarmNetwork
                   agents={session.agents}
                   agentProgress={agentProgress}
@@ -1939,6 +2205,32 @@ export default function App() {
                     )}
                   </button>
 
+                  {/* Red Team critiques */}
+                  {session.critiques && session.critiques.length > 0 && (
+                    <>
+                      <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
+                      <button
+                        id="tab-red-team"
+                        onClick={() => setActiveReportViewerId("redteam")}
+                        className="px-4 h-14 flex items-center gap-2 border-b-2 font-mono text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap"
+                        style={
+                          activeReportViewerId === "redteam"
+                            ? { borderColor: REDTEAM_HEX, color: "var(--color-text-primary)", background: "var(--color-bg-primary)" }
+                            : { borderColor: "transparent" }
+                        }
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" style={{ color: REDTEAM_HEX }} />
+                        <span className={activeReportViewerId === "redteam" ? "text-text-primary" : "text-text-muted"}>Red Team</span>
+                        <span
+                          className="min-w-4 h-4 px-1 flex items-center justify-center rounded-full text-[9px] font-bold"
+                          style={{ color: REDTEAM_HEX, background: `${REDTEAM_HEX}26`, border: `1px solid ${REDTEAM_HEX}4d` }}
+                        >
+                          {session.critiques.length}
+                        </span>
+                      </button>
+                    </>
+                  )}
+
                   <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
 
                   {/* Individual Specialist Dossiers */}
@@ -2023,6 +2315,70 @@ export default function App() {
                   onPersist={(updated) => { setSession(updated); saveToHistory(updated); }}
                   getAgentColorHex={getAgentColorHex}
                 />
+              ) : activeReportViewerId === "redteam" ? (
+                <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">
+                  <div className="max-w-3xl mx-auto">
+                    <div className="mb-8 pb-6 border-b border-border-warm">
+                      <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest mb-2.5" style={{ color: REDTEAM_HEX }}>
+                        <ShieldAlert className="w-3.5 h-3.5" style={{ color: REDTEAM_HEX }} />
+                        Red Team Adversarial Review
+                      </div>
+                      <h1 className="text-2xl md:text-3xl font-extrabold text-text-primary tracking-tight leading-tight mb-2 font-display">
+                        VEX Cross-Examination
+                      </h1>
+                      <p className="text-xs text-text-muted font-mono">
+                        Chief Adversarial Officer • {session.critiques?.length || 0} specialist report{(session.critiques?.length || 0) === 1 ? "" : "s"} stress-tested
+                      </p>
+                    </div>
+
+                    <div className="space-y-6">
+                      {(session.critiques || []).map((c) => (
+                        <div
+                          key={c.agentId}
+                          className="rounded-2xl border bg-bg-surface/40 p-5 relative overflow-hidden"
+                          style={{ borderColor: `${REDTEAM_HEX}55` }}
+                        >
+                          <div className="absolute top-0 left-0 h-full w-[3px]" style={{ background: REDTEAM_HEX }} />
+                          <div className="flex items-center gap-2 mb-4 pb-3 border-b border-border-warm">
+                            <ShieldAlert className="w-4 h-4 flex-shrink-0" style={{ color: REDTEAM_HEX }} />
+                            <div className="min-w-0">
+                              <h3 className="text-sm font-bold text-text-primary font-display truncate">{c.agentName}</h3>
+                              <p className="text-[10px] text-text-muted font-mono truncate">{c.agentRole}</p>
+                            </div>
+                          </div>
+                          <div className="space-y-3 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-text-primary mt-4 mb-2 font-display" {...props} />,
+                                h2: ({ node, ...props }) => <h2 className="text-base font-semibold mt-4 mb-2 font-display" style={{ color: REDTEAM_HEX }} {...props} />,
+                                h3: ({ node, ...props }) => <h3 className="text-sm font-semibold mt-3 mb-1.5 font-display" style={{ color: REDTEAM_HEX }} {...props} />,
+                                p: ({ node, ...props }) => <p className="mb-3 leading-relaxed text-text-secondary text-xs sm:text-sm" {...props} />,
+                                ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-3 space-y-1" {...props} />,
+                                ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-3 space-y-1" {...props} />,
+                                li: ({ node, ...props }) => <li className="text-text-secondary text-xs sm:text-sm" {...props} />,
+                                blockquote: ({ node, ...props }) => (
+                                  <blockquote
+                                    className="border-l-4 bg-bg-surface p-3 rounded-r-lg italic my-3 text-text-muted"
+                                    style={{ borderColor: REDTEAM_HEX }}
+                                    {...props}
+                                  />
+                                ),
+                                strong: ({ node, ...props }) => <strong className="font-bold text-text-primary" {...props} />,
+                                code: ({ node, ...props }) => <code className="bg-bg-primary px-1.5 py-0.5 rounded font-mono text-xs border border-border-warm" style={{ color: REDTEAM_HEX }} {...props} />,
+                                table: ({ node, ...props }) => <div className="overflow-x-auto my-4"><table className="min-w-full divide-y divide-border-warm border border-border-warm rounded-lg text-xs" {...props} /></div>,
+                                th: ({ node, ...props }) => <th className="bg-bg-primary px-4 py-2 text-left font-semibold text-text-primary" {...props} />,
+                                td: ({ node, ...props }) => <td className="px-4 py-2 border-t border-border-warm" {...props} />,
+                              }}
+                            >
+                              {c.critique}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               ) : (
               <div id="report-view-scroll" className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">
                 <div className="max-w-3xl mx-auto">

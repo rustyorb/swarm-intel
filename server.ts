@@ -740,7 +740,7 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, reports, settings, config } = req.body;
+      const { topic, reports, settings, config, critiques } = req.body;
       if (!topic || !reports || !Array.isArray(reports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
@@ -773,12 +773,28 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
         depthDirective = "\n\nDEPTH DIRECTIVE — DEEP: Maximize retention of technical nuance. Preserve quantified data, edge cases, dissenting views, tables, and scenario analyses surfaced by the specialists. Favor comprehensiveness and analytical rigor over brevity.";
       }
 
+      let critiquesBlock = "";
+      let critiqueDirective = "";
+      if (Array.isArray(critiques) && critiques.length > 0) {
+        const critiquesContext = critiques
+          .filter((c: any) => c && c.critique)
+          .map((c: any) => `### RED TEAM CRITIQUE OF ${c.agentName || "Specialist"} (${c.agentRole || "Investigator"})\n${c.critique}\n---\n`)
+          .join("\n");
+        if (critiquesContext) {
+          critiquesBlock = `\n\nRED TEAM CRITIQUES:\nThe following adversarial cross-examinations were produced by VEX, Chief Adversarial Officer, who ruthlessly stress-tested each specialist report. Each critique flags weak evidence, blind spots, counter-evidence, and a confidence verdict (High/Medium/Low).\n\n${critiquesContext}`;
+          critiqueDirective = `\n\n## 4.5 Red Team Findings & Rebuttals
+- The swarm was subjected to an adversarial red-team review by VEX. Address EVERY material critique raised above.
+- For each critique, either (a) rebut it with specific evidence drawn from the specialist reports, or (b) concede it and explicitly adjust the affected conclusions elsewhere in this synthesis.
+- Do NOT ignore any LOW-confidence verdict: where a specialist report was rated Low reliability, state plainly how that constrains the overall confidence of this synthesis.`;
+        }
+      }
+
       const prompt = `OVERARCHING TOPIC: "${topic}"
 
 You are the Lead Swarm Orchestrator. Your mission is to synthesize the following expert investigative reports into a single, comprehensive, publication-grade analytical document.
 
 SPECIALIST REPORTS:
-${reportsContext}
+${reportsContext}${critiquesBlock}
 
 REQUIRED OUTPUT STRUCTURE:
 # ${topic}: Swarm Intelligence Synthesis
@@ -799,7 +815,7 @@ REQUIRED OUTPUT STRUCTURE:
 ## 4. Conflict, Consensus & Uncertainty
 - Where did specialists agree?
 - Where were there disagreements or trade-offs?
-- Identify gaps or areas requiring further future investigation.
+- Identify gaps or areas requiring further future investigation.${critiqueDirective}
 
 ## 5. Strategic Trajectory & Recommendations
 - Forward-looking implications.
@@ -843,6 +859,78 @@ STYLE GUIDELINES:
     } catch (error: any) {
       console.error("Error in /api/research/synthesize-stream:", error);
       res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Synthesis failed." })}\n\n`);
+      res.end();
+    }
+  });
+
+  // 3.5. Red Team Endpoint - VEX adversarially cross-examines a single specialist report via SSE
+  app.post("/api/research/redteam-stream", async (req, res) => {
+    try {
+      const { topic, agent, report, settings } = req.body;
+      if (!topic || !agent || !report) {
+        return res.status(400).json({ error: "Topic, agent, and report are required for a red team review." });
+      }
+
+      console.log(`Red Team cross-examination: VEX vs ${agent.name} (${agent.role}) for topic: "${topic}"`);
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+
+      const systemInstruction = "You are VEX, Chief Adversarial Officer — a ruthless, brilliant red-team analyst. You exist to stress-test intelligence, never to flatter it. You are sharp, specific, and unsparing, but intellectually honest: your objective is to make the final synthesis stronger by exposing every weakness in the specialist's work.";
+
+      const prompt = `OVERARCHING TOPIC: "${topic}"
+
+You are cross-examining a specialist report submitted by ${agent.name}, a ${agent.role}.
+Their assigned investigative angle was: "${agent.investigativeAngle || "n/a"}".
+
+SPECIALIST REPORT UNDER REVIEW:
+${report}
+
+Conduct a ruthless adversarial cross-examination of this report. Be sharp and specific — cite the report's OWN claims when you attack them. Do not hedge, do not flatter, do not merely summarize the report back. Structure your critique in Markdown with EXACTLY these four sections:
+
+## 1. Weak Evidence & Overreach
+Identify claims that are unsupported, speculative, or asserted with more confidence than the evidence warrants. Quote or paraphrase the specific claims you are challenging.
+
+## 2. Blind Spots & Missing Angles
+Identify what this report failed to consider — stakeholders, data, counter-scenarios, or second-order effects it ignored.
+
+## 3. Counter-Evidence & Alternative Interpretations
+Offer concrete counter-evidence or alternative readings of the same facts that would undercut the report's conclusions.
+
+## 4. Confidence Verdict
+State an overall reliability verdict of exactly HIGH, MEDIUM, or LOW, followed by a single-sentence justification. Use this exact format: "**Verdict: MEDIUM** — <one-line justification>".
+
+Keep the whole cross-examination tight and high-signal: roughly 400-700 words. Write as VEX, in the first person, with an incisive prosecutorial tone.`;
+
+      const pingInterval = setInterval(() => {
+        res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+      }, 5000);
+
+      try {
+        await runUniversalStream(
+          "agent",
+          settings,
+          prompt,
+          systemInstruction,
+          false,
+          (text: string) => {
+            res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
+          }
+        );
+
+        clearInterval(pingInterval);
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        res.end();
+      } catch (error: any) {
+        clearInterval(pingInterval);
+        throw error;
+      }
+    } catch (error: any) {
+      console.error("Error in /api/research/redteam-stream:", error);
+      res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Red team review failed." })}\n\n`);
       res.end();
     }
   });

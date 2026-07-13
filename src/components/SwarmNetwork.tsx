@@ -27,6 +27,7 @@ const hexFor = (theme: string): string => AGENT_COLOR_HEX[theme] || "#fb923c";
 const ACCENT = "#fb923c";
 const SUCCESS = "#5bb797";
 const ERROR = "#d66060";
+const REDTEAM = "#ec4899";
 
 const RING_R = 30;
 const RING_C = 2 * Math.PI * RING_R;
@@ -52,6 +53,9 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
   const ry = Math.max(H / 2 - 104, 116);
   const n = agents.length;
   const isSynth = sessionStatus === "synthesizing";
+  const isRedTeam = sessionStatus === "redteaming";
+  const hubActive = isSynth || isRedTeam;
+  const hubAccent = isRedTeam ? REDTEAM : ACCENT;
 
   const nodes = agents.map((agent, i) => {
     const angle = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(n, 1);
@@ -91,7 +95,9 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
           transform: "translate(-50%, -50%)",
           width: Math.max(rx, ry) * 1.7,
           height: Math.max(rx, ry) * 1.7,
-          background: `radial-gradient(circle, rgba(251,146,60,${isSynth ? 0.18 : 0.09}) 0%, transparent 62%)`,
+          background: isRedTeam
+            ? "radial-gradient(circle, rgba(236,72,153,0.18) 0%, transparent 62%)"
+            : `radial-gradient(circle, rgba(251,146,60,${isSynth ? 0.18 : 0.09}) 0%, transparent 62%)`,
           transition: "background 0.6s ease",
         }}
       />
@@ -102,12 +108,12 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
           const hex = hexFor(agent.colorTheme);
           const isWorking = agent.status === "working";
           const isCompleted = agent.status === "completed";
-          const synthReturn = isSynth && isCompleted;
+          const synthReturn = (isSynth || isRedTeam) && isCompleted;
           const showPackets = isWorking || synthReturn;
           const forward = `M ${cx} ${cy} Q ${ctrlX} ${ctrlY} ${x} ${y}`;
           const reverse = `M ${x} ${y} Q ${ctrlX} ${ctrlY} ${cx} ${cy}`;
           const packetPath = synthReturn ? reverse : forward;
-          const packetColor = synthReturn ? ACCENT : hex;
+          const packetColor = synthReturn ? (isRedTeam ? REDTEAM : ACCENT) : hex;
           const linkOpacity = showPackets ? 0.55 : isCompleted ? 0.32 : 0.14;
 
           return (
@@ -140,32 +146,39 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
         >
           <motion.div
             className="absolute rounded-full border border-dashed"
-            style={{ inset: -18, borderColor: `${ACCENT}44` }}
+            style={{ inset: -18, borderColor: `${hubAccent}44` }}
             animate={{ rotate: 360 }}
             transition={{ duration: 18, repeat: Infinity, ease: "linear" }}
           />
           <motion.div
             className="absolute rounded-full"
-            style={{ inset: -6, border: `1px solid ${ACCENT}55` }}
+            style={{ inset: -6, border: `1px solid ${hubAccent}55` }}
             animate={{ scale: [1, 1.16, 1], opacity: [0.6, 0, 0.6] }}
-            transition={{ duration: isSynth ? 1.4 : 2.2, repeat: Infinity, ease: "easeOut" }}
+            transition={{ duration: hubActive ? 1.4 : 2.2, repeat: Infinity, ease: "easeOut" }}
           />
           <div
             className="relative w-16 h-16 rounded-2xl flex items-center justify-center"
             style={{
-              background: "linear-gradient(135deg, #fdba74, #fb923c)",
-              boxShadow: `0 0 ${isSynth ? 42 : 24}px ${ACCENT}${isSynth ? "aa" : "77"}`,
-              transition: "box-shadow 0.6s ease",
+              background: isRedTeam
+                ? "linear-gradient(135deg, #f9a8d4, #ec4899)"
+                : "linear-gradient(135deg, #fdba74, #fb923c)",
+              boxShadow: isRedTeam
+                ? `0 0 42px ${REDTEAM}aa`
+                : `0 0 ${isSynth ? 42 : 24}px ${ACCENT}${isSynth ? "aa" : "77"}`,
+              transition: "box-shadow 0.6s ease, background 0.6s ease",
             }}
           >
             <Cpu className="w-7 h-7 text-[#14110c]" strokeWidth={2.2} />
           </div>
           <div className="absolute left-1/2 top-full mt-3 -translate-x-1/2 whitespace-nowrap text-center">
-            <div className="text-[10px] font-mono font-bold uppercase tracking-widest text-accent-warm">
-              Lead Orchestrator
+            <div
+              className="text-[10px] font-mono font-bold uppercase tracking-widest text-accent-warm"
+              style={isRedTeam ? { color: REDTEAM } : undefined}
+            >
+              {isRedTeam ? "VEX // Red Team" : "Lead Orchestrator"}
             </div>
             <div className="text-[8px] font-mono uppercase tracking-widest text-text-muted mt-0.5">
-              {isSynth ? "Synthesizing" : "Coordinating"}
+              {isRedTeam ? "Red Team Review" : isSynth ? "Synthesizing" : "Coordinating"}
             </div>
           </div>
         </motion.div>

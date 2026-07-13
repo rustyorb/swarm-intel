@@ -11,11 +11,19 @@ export interface Agent {
   error?: string;
 }
 
-export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "synthesizing" | "completed" | "failed";
+export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "redteaming" | "synthesizing" | "completed" | "failed";
 
 export interface SwarmConfig {
   agentCount: number;
   depth: "recon" | "standard" | "deep";
+  redTeam?: boolean;
+}
+
+export interface RedTeamCritique {
+  agentId: string;
+  agentName: string;
+  agentRole: string;
+  critique: string;
 }
 
 export interface ChatMessage {
@@ -37,6 +45,7 @@ export interface ResearchSession {
   status: SessionStatus;
   error?: string;
   config?: SwarmConfig;
+  critiques?: RedTeamCritique[];
   chat?: ChatMessage[];
   favorite?: boolean;
   tags?: string[];
