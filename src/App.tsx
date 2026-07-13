@@ -29,7 +29,13 @@ import {
   Copy,
   Download,
   Check,
-  X
+  X,
+  Settings,
+  Key,
+  Server,
+  Globe,
+  Database,
+  Save
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import PixelAvatar from "./components/PixelAvatar";
@@ -100,6 +106,23 @@ interface LogEntry {
   agentColor?: string;
 }
 
+const DEFAULT_SETTINGS = {
+  providers: {
+    gemini: { apiKey: "", baseUrl: "", enabled: true, fetchedModels: ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"] },
+    openrouter: { apiKey: "", baseUrl: "", enabled: false, fetchedModels: [] as string[] },
+    anthropic: { apiKey: "", baseUrl: "", enabled: false, fetchedModels: [] as string[] },
+    openai: { apiKey: "", baseUrl: "", enabled: false, fetchedModels: [] as string[] },
+    venice: { apiKey: "", baseUrl: "", enabled: false, fetchedModels: [] as string[] },
+    lmstudio: { apiKey: "", baseUrl: "http://localhost:1234/v1", enabled: false, fetchedModels: [] as string[] },
+    ollama: { apiKey: "", baseUrl: "http://localhost:11434", enabled: false, fetchedModels: [] as string[] },
+  },
+  modelMapping: {
+    orchestrator: { provider: "gemini", model: "gemini-3.5-flash" },
+    agent: { provider: "gemini", model: "gemini-3.5-flash" },
+    synthesis: { provider: "gemini", model: "gemini-3.5-flash" },
+  }
+};
+
 export default function App() {
   const [topic, setTopic] = useState("");
   const [session, setSession] = useState<ResearchSession | null>(null);
@@ -110,6 +133,71 @@ export default function App() {
   const [agentProgress, setAgentProgress] = useState<Record<string, { percent: number; statusText: string }>>({});
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [settingsTab, setSettingsTab] = useState<"providers" | "routing">("providers");
+  const [testingConnection, setTestingConnection] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<Record<string, { success: boolean; message: string }>>({});
+
+  const handleFetchModels = async (providerName: string) => {
+    setTestingConnection(providerName);
+    setConnectionStatus(prev => ({ ...prev, [providerName]: { success: false, message: "Validating API link..." } }));
+    
+    try {
+      const providerConfig = settings.providers[providerName as keyof typeof settings.providers];
+      const response = await fetch("/api/settings/fetch-models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: providerName,
+          apiKey: providerConfig.apiKey,
+          baseUrl: providerConfig.baseUrl
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(errData?.error || `Server responded with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const models = data.models || [];
+      
+      if (models.length === 0) {
+        throw new Error("No models returned by provider.");
+      }
+
+      // Update settings
+      setSettings(prev => {
+        const updatedProviders = {
+          ...prev.providers,
+          [providerName]: {
+            ...prev.providers[providerName as keyof typeof prev.providers],
+            fetchedModels: models,
+            enabled: true
+          }
+        };
+        return {
+          ...prev,
+          providers: updatedProviders
+        };
+      });
+
+      setConnectionStatus(prev => ({
+        ...prev,
+        [providerName]: { success: true, message: `Success! ${models.length} models loaded.` }
+      }));
+      addLog("SYSTEM", `Successfully fetched and cached ${models.length} models for ${providerName.toUpperCase()}`, "success");
+    } catch (err: any) {
+      setConnectionStatus(prev => ({
+        ...prev,
+        [providerName]: { success: false, message: err.message || "Failed to validate credentials." }
+      }));
+      addLog("SYSTEM", `Failed to validate credentials for ${providerName.toUpperCase()}: ${err.message}`, "warning");
+    } finally {
+      setTestingConnection(null);
+    }
+  };
 
   // Set default sidebars based on initial load viewport width
   useEffect(() => {
@@ -173,7 +261,8 @@ export default function App() {
           topic: session.topic,
           agents: session.agents,
           agentIdToRegenerate: agentId,
-          nudge: nudge
+          nudge: nudge,
+          settings: settings
         }),
       });
 
@@ -248,10 +337,44 @@ export default function App() {
       if (storedLogs) {
         setLogs(JSON.parse(storedLogs));
       }
+      const storedSettings = localStorage.getItem("research_swarm_settings");
+      if (storedSettings) {
+        try {
+          const parsed = JSON.parse(storedSettings);
+          // Migrate old Gemini models to gemini-3.5-flash if they are mapped
+          if (parsed.modelMapping) {
+            const roles: ("orchestrator" | "agent" | "synthesis")[] = ["orchestrator", "agent", "synthesis"];
+            roles.forEach(role => {
+              if (parsed.modelMapping[role] && parsed.modelMapping[role].provider === "gemini") {
+                const model = parsed.modelMapping[role].model;
+                if (!model || model.includes("1.5") || model.includes("2.0") || model.includes("2.5") || model === "gemini-pro") {
+                  parsed.modelMapping[role].model = "gemini-3.5-flash";
+                }
+              }
+            });
+          }
+          if (parsed.providers && parsed.providers.gemini) {
+            // Always overwrite fetchedModels for Gemini with the active 2026 ones
+            parsed.providers.gemini.fetchedModels = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
+          }
+          setSettings(parsed);
+        } catch (err) {
+          console.warn("Stored settings parsing or migration failed:", err);
+        }
+      }
     } catch (e) {
       console.error("Failed to load history or active states:", e);
     }
   }, []);
+
+  // Save settings helper
+  useEffect(() => {
+    try {
+      localStorage.setItem("research_swarm_settings", JSON.stringify(settings));
+    } catch (e) {
+      console.error("Failed to save settings:", e);
+    }
+  }, [settings]);
 
   // Save history helper
   const saveToHistory = (newSession: ResearchSession) => {
@@ -331,7 +454,7 @@ export default function App() {
       const response = await fetch("/api/research/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: searchTopic }),
+        body: JSON.stringify({ topic: searchTopic, settings: settings }),
       });
 
       if (!response.ok) {
@@ -350,6 +473,13 @@ export default function App() {
       }));
 
       addLog("ORCHESTRATOR", `Successfully designated ${loadedAgents.length} elite specialists for this topic.`, "success");
+
+      // Initialize progress states for each assembled agent
+      const initialProgress: Record<string, { percent: number; statusText: string }> = {};
+      loadedAgents.forEach(a => {
+        initialProgress[a.id] = { percent: 0, statusText: "AWAITING_THREAD" };
+      });
+      setAgentProgress(initialProgress);
 
       // Animate agent assembly one by one
       setSession(prev => prev ? { ...prev, agents: loadedAgents } : null);
@@ -387,12 +517,16 @@ export default function App() {
 
     const agents = [...currentSession.agents];
     
-    // Initialize progress record for each agent
-    const progressMap: Record<string, { percent: number; statusText: string }> = {};
-    agents.forEach(a => {
-      progressMap[a.id] = { percent: 0, statusText: "AWAITING_THREAD" };
+    // Initialize progress record for each agent safely
+    setAgentProgress(prev => {
+      const copy = { ...prev };
+      agents.forEach(a => {
+        if (!copy[a.id]) {
+          copy[a.id] = { percent: 0, statusText: "AWAITING_THREAD" };
+        }
+      });
+      return copy;
     });
-    setAgentProgress(progressMap);
 
     // List of simulated operations
     const simOperations = [
@@ -454,7 +588,7 @@ export default function App() {
         const response = await fetch("/api/research/agent-run-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: currentSession.topic, agent }),
+          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings }),
         });
 
         if (!response.ok) {
@@ -596,7 +730,8 @@ export default function App() {
           agentName: r.name,
           agentRole: r.role,
           report: r.report
-        }))
+        })),
+        settings: settings
       };
 
       const response = await fetch("/api/research/synthesize-stream", {
@@ -777,6 +912,16 @@ export default function App() {
           >
             <RotateCcw className="w-3.5 h-3.5" />
             Reset Swarm
+          </button>
+
+          <button
+            id="btn-open-settings"
+            onClick={() => setShowSettingsModal(true)}
+            className="px-4 py-2 bg-bg-surface hover:bg-bg-primary text-text-primary text-xs font-bold rounded uppercase tracking-wider border border-border-warm transition-all duration-150 flex items-center gap-2 cursor-pointer"
+            title="Configure API Keys, Base URLs, and Model Mappings"
+          >
+            <Settings className="w-3.5 h-3.5 text-accent-warm animate-hover-spin" />
+            <span>Settings</span>
           </button>
         </div>
       </header>
@@ -1796,6 +1941,321 @@ export default function App() {
               </div>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-bg-surface border border-border-warm rounded-2xl w-full max-w-3xl h-[85vh] flex flex-col overflow-hidden shadow-2xl relative animate-fade-in text-text-primary">
+            {/* Header */}
+            <div className="p-6 border-b border-border-warm flex items-start justify-between bg-bg-surface flex-shrink-0">
+              <div>
+                <h3 className="text-sm font-bold uppercase tracking-wider font-mono text-accent-warm flex items-center gap-2">
+                  <Settings className="w-4 h-4 animate-spin-slow" />
+                  Swarm Intelligence Node Settings
+                </h3>
+                <p className="text-[11px] text-text-secondary mt-1 leading-relaxed">
+                  Supply custom credentials to integrate third-party models and route specialist tasks dynamically.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="w-8 h-8 rounded-full border border-border-warm bg-bg-surface text-text-muted hover:text-text-primary flex items-center justify-center transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body: Left menu, Right content */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Left Menu Tab bar */}
+              <div className="w-[180px] border-r border-border-warm bg-bg-primary/30 p-4 flex flex-col gap-1.5 flex-shrink-0">
+                <button
+                  onClick={() => setSettingsTab("providers")}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "providers" 
+                      ? "bg-bg-surface border border-border-warm text-accent-warm shadow-md" 
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-primary/40"
+                  }`}
+                >
+                  <Key className="w-3.5 h-3.5" />
+                  API Credentials
+                </button>
+                <button
+                  onClick={() => setSettingsTab("routing")}
+                  className={`w-full text-left px-3 py-2.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "routing" 
+                      ? "bg-bg-surface border border-border-warm text-accent-warm shadow-md" 
+                      : "text-text-secondary hover:text-text-primary hover:bg-bg-primary/40"
+                  }`}
+                >
+                  <Cpu className="w-3.5 h-3.5" />
+                  Specialist Routing
+                </button>
+                
+                <div className="mt-auto p-2.5 bg-bg-primary/50 rounded-lg border border-border-warm/60">
+                  <div className="text-[9px] font-mono font-bold text-text-muted uppercase tracking-wider mb-1 flex items-center gap-1">
+                    <Database className="w-2.5 h-2.5" /> Storage Mode
+                  </div>
+                  <div className="text-[10px] text-text-secondary font-sans leading-relaxed">
+                    Browser local state persistence active.
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Content pane */}
+              <div className="flex-1 overflow-y-auto p-6 bg-bg-surface">
+                {settingsTab === "providers" ? (
+                  <div className="space-y-6">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-text-primary mb-3">
+                        Third-Party & Local Model Providers
+                      </h4>
+                      <p className="text-[11px] text-text-secondary leading-relaxed mb-4">
+                        API keys are never exposed in the client. All calls are proxied securely through the local workspace server. Click <strong>Fetch & Validate</strong> to retrieve active models.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {Object.keys(settings.providers).map((key) => {
+                        const prov = settings.providers[key as keyof typeof settings.providers];
+                        const isLocal = key === "lmstudio" || key === "ollama";
+                        const displayName = key === "gemini" ? "Google Gemini" :
+                                            key === "openrouter" ? "OpenRouter" :
+                                            key === "anthropic" ? "Anthropic" :
+                                            key === "openai" ? "OpenAI" :
+                                            key === "venice" ? "Venice AI" :
+                                            key === "lmstudio" ? "LM Studio (Local)" : "Ollama (Local)";
+
+                        return (
+                          <div key={key} className="p-4 rounded-xl border border-border-warm bg-bg-primary/20 space-y-3.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold font-mono text-text-primary flex items-center gap-1.5 uppercase">
+                                <span className={`w-2 h-2 rounded-full ${prov.enabled && prov.fetchedModels.length > 0 ? "bg-accent-warm" : "bg-border-warm"}`}></span>
+                                {displayName}
+                              </span>
+                              
+                              <button
+                                onClick={() => handleFetchModels(key)}
+                                disabled={testingConnection !== null || (!isLocal && !prov.apiKey && key !== "gemini")}
+                                className="px-3 py-1.5 bg-bg-surface hover:bg-bg-primary border border-border-warm hover:border-border-hi-warm text-text-secondary hover:text-text-primary disabled:opacity-50 text-[10px] font-mono font-bold rounded uppercase tracking-wider cursor-pointer flex items-center gap-1.5 transition-all"
+                              >
+                                {testingConnection === key ? (
+                                  <>
+                                    <RefreshCw className="w-3 h-3 animate-spin" />
+                                    Fetching...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw className="w-3 h-3" />
+                                    Fetch & Validate
+                                  </>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Credentials inputs */}
+                            <div className="grid grid-cols-1 gap-3">
+                              {!isLocal ? (
+                                <div>
+                                  <label className="text-[9px] font-bold font-mono uppercase text-text-muted tracking-wider block mb-1">
+                                    API Key
+                                  </label>
+                                  <input
+                                    type="password"
+                                    placeholder={key === "gemini" ? "Using default GEMINI_API_KEY environment variable if empty" : `Enter your ${displayName} API Key`}
+                                    value={prov.apiKey}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setSettings(prev => ({
+                                        ...prev,
+                                        providers: {
+                                          ...prev.providers,
+                                          [key]: { ...prev.providers[key as keyof typeof prev.providers], apiKey: val }
+                                        }
+                                      }));
+                                    }}
+                                    className="w-full bg-bg-primary border border-border-warm text-text-primary rounded-lg p-2.5 text-xs focus:outline-none focus:border-border-hi-warm font-mono"
+                                  />
+                                </div>
+                              ) : (
+                                <div>
+                                  <label className="text-[9px] font-bold font-mono uppercase text-text-muted tracking-wider block mb-1">
+                                    Base Endpoint URL
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder={key === "lmstudio" ? "http://localhost:1234/v1" : "http://localhost:11434"}
+                                    value={prov.baseUrl}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setSettings(prev => ({
+                                        ...prev,
+                                        providers: {
+                                          ...prev.providers,
+                                          [key]: { ...prev.providers[key as keyof typeof prev.providers], baseUrl: val }
+                                        }
+                                      }));
+                                    }}
+                                    className="w-full bg-bg-primary border border-border-warm text-text-primary rounded-lg p-2.5 text-xs focus:outline-none focus:border-border-hi-warm font-mono"
+                                  />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Connection Status messages */}
+                            {connectionStatus[key] && (
+                              <div className={`p-2.5 rounded-lg border text-[10px] leading-relaxed font-mono ${
+                                connectionStatus[key].success 
+                                  ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400" 
+                                  : "bg-rose-500/5 border-rose-500/20 text-rose-400"
+                              }`}>
+                                {connectionStatus[key].message}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-text-primary mb-3">
+                        Specialist Swarm Workload Routing
+                      </h4>
+                      <p className="text-[11px] text-text-secondary leading-relaxed mb-4">
+                        Bind specific specialist task stages to individual models. Ensure models are fetched first in the API Credentials tab before routing.
+                      </p>
+                    </div>
+
+                    <div className="space-y-5">
+                      {["orchestrator", "agent", "synthesis"].map((role) => {
+                        const mapping = settings.modelMapping[role as keyof typeof settings.modelMapping];
+                        const displayName = role === "orchestrator" ? "Lead Orchestrator (Assembles agents)" :
+                                            role === "agent" ? "Specialist Investigators (Conduct parallel research)" :
+                                            "Compiler Synthesizer (Merges final report)";
+                        
+                        // Get available models for selected provider
+                        const selectedProvider = mapping.provider;
+                        const providerConfig = settings.providers[selectedProvider as keyof typeof settings.providers];
+                        const availableModels = [...(providerConfig?.fetchedModels || [])].sort((a, b) => a.localeCompare(b));
+
+                        return (
+                          <div key={role} className="p-4 rounded-xl border border-border-warm bg-bg-primary/20 space-y-3.5">
+                            <span className="text-xs font-bold text-accent-warm block font-display capitalize">
+                              {displayName}
+                            </span>
+
+                            <div className="grid grid-cols-2 gap-4">
+                              {/* Provider selection */}
+                              <div>
+                                <label className="text-[9px] font-bold font-mono uppercase text-text-muted tracking-wider block mb-1">
+                                  Select Provider
+                                </label>
+                                <select
+                                  value={mapping.provider}
+                                  onChange={(e) => {
+                                    const nextProv = e.target.value;
+                                    const nextProvConfig = settings.providers[nextProv as keyof typeof settings.providers];
+                                    const firstModel = nextProvConfig?.fetchedModels?.[0] || "";
+                                    setSettings(prev => ({
+                                      ...prev,
+                                      modelMapping: {
+                                        ...prev.modelMapping,
+                                        [role]: { provider: nextProv, model: firstModel }
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full bg-bg-primary border border-border-warm text-text-primary rounded-lg p-2.5 text-xs focus:outline-none focus:border-border-hi-warm cursor-pointer font-sans"
+                                >
+                                  {Object.keys(settings.providers).map((k) => {
+                                    const prov = settings.providers[k as keyof typeof settings.providers];
+                                    const isConfigured = prov.fetchedModels.length > 0 || k === "gemini";
+                                    return (
+                                      <option key={k} value={k}>
+                                        {k.toUpperCase()} {!isConfigured ? "(NOT FETCHED)" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+
+                              {/* Model selection */}
+                              <div>
+                                <label className="text-[9px] font-bold font-mono uppercase text-text-muted tracking-wider block mb-1">
+                                  Choose Model
+                                </label>
+                                {availableModels.length > 0 ? (
+                                  <select
+                                    value={mapping.model}
+                                    onChange={(e) => {
+                                      const nextModel = e.target.value;
+                                      setSettings(prev => ({
+                                        ...prev,
+                                        modelMapping: {
+                                          ...prev.modelMapping,
+                                          [role]: { ...prev.modelMapping[role as keyof typeof prev.modelMapping], model: nextModel }
+                                        }
+                                      }));
+                                    }}
+                                    className="w-full bg-bg-primary border border-border-warm text-text-primary rounded-lg p-2.5 text-xs focus:outline-none focus:border-border-hi-warm cursor-pointer font-mono"
+                                  >
+                                    {availableModels.map((m) => (
+                                      <option key={m} value={m}>
+                                        {m}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <div className="space-y-1">
+                                    <input
+                                      type="text"
+                                      placeholder="Manual model identifier (e.g. llama3)"
+                                      value={mapping.model}
+                                      onChange={(e) => {
+                                        const nextModel = e.target.value;
+                                        setSettings(prev => ({
+                                          ...prev,
+                                          modelMapping: {
+                                            ...prev.modelMapping,
+                                            [role]: { ...prev.modelMapping[role as keyof typeof prev.modelMapping], model: nextModel }
+                                          }
+                                        }));
+                                      }}
+                                      className="w-full bg-bg-primary border border-border-warm text-text-primary rounded-lg p-2.5 text-xs focus:outline-none focus:border-border-hi-warm font-mono"
+                                    />
+                                    <span className="text-[8px] text-text-muted italic block leading-normal">
+                                      No models cached for {selectedProvider.toUpperCase()}. Type manually above or Fetch models in API tab first.
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-border-warm bg-bg-surface flex items-center justify-between flex-shrink-0">
+              <span className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
+                Config state saved dynamically
+              </span>
+              <button
+                onClick={() => setShowSettingsModal(false)}
+                className="px-5 py-2.5 bg-accent-warm hover:bg-accent-hi-warm text-black text-xs font-bold rounded-xl uppercase tracking-wider transition-all duration-150 flex items-center gap-1.5 cursor-pointer shadow-lg shadow-accent-warm/10"
+              >
+                <Save className="w-4 h-4" />
+                Apply Configuration
+              </button>
+            </div>
           </div>
         </div>
       )}
