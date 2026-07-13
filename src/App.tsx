@@ -134,10 +134,10 @@ const getAgentSheet = (name: string, role: string) => {
   return {
     level: 12 + (h % 48),
     stats: [
-      { label: "INT", value: 8 + ((h >> 3) % 11) },
-      { label: "WIS", value: 8 + ((h >> 7) % 11) },
-      { label: "ARC", value: 8 + ((h >> 11) % 11) },
-      { label: "LCK", value: 8 + ((h >> 15) % 11) },
+      { label: "INT", value: 8 + ((h >>> 3) % 11) },
+      { label: "WIS", value: 8 + ((h >>> 7) % 11) },
+      { label: "ARC", value: 8 + ((h >>> 11) % 11) },
+      { label: "LCK", value: 8 + ((h >>> 15) % 11) },
     ],
   };
 };
@@ -300,11 +300,49 @@ const DEFAULT_SETTINGS = {
   }
 };
 
+// Hydrate persisted state synchronously in useState initializers. Loading via
+// a mount effect races the save effects (which fire on mount with default
+// state) — under StrictMode's double-mount that deterministically overwrites
+// everything stored, wiping settings/session/logs on every page load.
+function loadStoredSession(): ResearchSession | null {
+  try {
+    const stored = localStorage.getItem("research_swarm_current_session");
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    // A reload kills the async loops that drive live sessions; restoring one
+    // mid-flight leaves the UI frozen at that stage with no errors.
+    if (["assembling", "researching", "redteaming", "synthesizing"].includes(parsed.status)) {
+      parsed.status = "failed";
+      parsed.error = "Session was interrupted by a page reload before it finished. Start a new run.";
+    }
+    return parsed;
+  } catch (e) {
+    console.error("Failed to load session:", e);
+    return null;
+  }
+}
+
 export default function App() {
-  const [topic, setTopic] = useState("");
-  const [session, setSession] = useState<ResearchSession | null>(null);
-  const [history, setHistory] = useState<ResearchSession[]>([]);
-  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [topic, setTopic] = useState(() => loadStoredSession()?.topic || "");
+  const [session, setSession] = useState<ResearchSession | null>(loadStoredSession);
+  const [history, setHistory] = useState<ResearchSession[]>(() => {
+    try {
+      const stored = localStorage.getItem("research_swarm_history");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.error("Failed to load history:", e);
+      return [];
+    }
+  });
+  const [logs, setLogs] = useState<LogEntry[]>(() => {
+    try {
+      const stored = localStorage.getItem("research_swarm_current_logs");
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      console.error("Failed to load logs:", e);
+      return [];
+    }
+  });
   const [activeTab, setActiveTab] = useState<"synthesis" | string>("synthesis");
   const [activeReportViewerId, setActiveReportViewerId] = useState<string>("synthesis");
   const [agentProgress, setAgentProgress] = useState<Record<string, { percent: number; statusText: string }>>({});
@@ -312,7 +350,34 @@ export default function App() {
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<typeof DEFAULT_SETTINGS>(() => {
+    try {
+      const stored = localStorage.getItem("research_swarm_settings");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Migrate old Gemini models to gemini-3.5-flash if they are mapped
+        if (parsed.modelMapping) {
+          const roles: ("orchestrator" | "agent" | "synthesis")[] = ["orchestrator", "agent", "synthesis"];
+          roles.forEach(role => {
+            if (parsed.modelMapping[role] && parsed.modelMapping[role].provider === "gemini") {
+              const model = parsed.modelMapping[role].model;
+              if (!model || model.includes("1.5") || model.includes("2.0") || model.includes("2.5") || model === "gemini-pro") {
+                parsed.modelMapping[role].model = "gemini-3.5-flash";
+              }
+            }
+          });
+        }
+        if (parsed.providers && parsed.providers.gemini) {
+          // Always overwrite fetchedModels for Gemini with the active 2026 ones
+          parsed.providers.gemini.fetchedModels = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
+        }
+        return parsed;
+      }
+    } catch (err) {
+      console.warn("Stored settings parsing or migration failed:", err);
+    }
+    return DEFAULT_SETTINGS;
+  });
   const [settingsTab, setSettingsTab] = useState<"providers" | "routing">("providers");
   const [testingConnection, setTestingConnection] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<Record<string, { success: boolean; message: string }>>({});
@@ -616,76 +681,6 @@ export default function App() {
       .catch(() => {});
   }, []);
 
-  // Load history, session, and logs from localStorage on mount.
-  // Each item loads independently so one corrupted entry can't block the rest
-  // (a blocked settings load would let the save-effect overwrite stored keys
-  // with defaults).
-  useEffect(() => {
-    try {
-      const storedHistory = localStorage.getItem("research_swarm_history");
-      if (storedHistory) {
-        setHistory(JSON.parse(storedHistory));
-      }
-    } catch (e) {
-      console.error("Failed to load history:", e);
-    }
-    try {
-      const storedSession = localStorage.getItem("research_swarm_current_session");
-      if (storedSession) {
-        const parsedSession = JSON.parse(storedSession);
-        // A reload kills the async loops that drive live sessions; restoring
-        // one mid-flight leaves the UI frozen at that stage with no errors.
-        if (["assembling", "researching", "redteaming", "synthesizing"].includes(parsedSession.status)) {
-          parsedSession.status = "failed";
-          parsedSession.error = "Session was interrupted by a page reload before it finished. Start a new run.";
-        }
-        setSession(parsedSession);
-        if (parsedSession.topic) {
-          setTopic(parsedSession.topic);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load session:", e);
-    }
-    try {
-      const storedLogs = localStorage.getItem("research_swarm_current_logs");
-      if (storedLogs) {
-        setLogs(JSON.parse(storedLogs));
-      }
-    } catch (e) {
-      console.error("Failed to load logs:", e);
-    }
-    try {
-      const storedSettings = localStorage.getItem("research_swarm_settings");
-      if (storedSettings) {
-        try {
-          const parsed = JSON.parse(storedSettings);
-          // Migrate old Gemini models to gemini-3.5-flash if they are mapped
-          if (parsed.modelMapping) {
-            const roles: ("orchestrator" | "agent" | "synthesis")[] = ["orchestrator", "agent", "synthesis"];
-            roles.forEach(role => {
-              if (parsed.modelMapping[role] && parsed.modelMapping[role].provider === "gemini") {
-                const model = parsed.modelMapping[role].model;
-                if (!model || model.includes("1.5") || model.includes("2.0") || model.includes("2.5") || model === "gemini-pro") {
-                  parsed.modelMapping[role].model = "gemini-3.5-flash";
-                }
-              }
-            });
-          }
-          if (parsed.providers && parsed.providers.gemini) {
-            // Always overwrite fetchedModels for Gemini with the active 2026 ones
-            parsed.providers.gemini.fetchedModels = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
-          }
-          setSettings(parsed);
-        } catch (err) {
-          console.warn("Stored settings parsing or migration failed:", err);
-        }
-      }
-    } catch (e) {
-      console.error("Failed to load settings:", e);
-    }
-  }, []);
-
   // Save settings helper
   useEffect(() => {
     try {
@@ -839,10 +834,14 @@ export default function App() {
       }
 
       const data = await response.json();
-      const loadedAgents: Agent[] = data.agents.map((ag: any) => ({
+      const loadedAgents: Agent[] = (data.agents || []).map((ag: any) => ({
         ...ag,
         status: "idle" as AgentStatus
       }));
+
+      if (loadedAgents.length === 0) {
+        throw new Error("The orchestrator returned zero agents. Check the orchestrator model in Settings — some models fail to produce the required JSON structure.");
+      }
 
       addLog("ORCHESTRATOR", `Successfully designated ${loadedAgents.length} elite specialists for this topic.`, "success");
 

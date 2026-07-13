@@ -332,9 +332,12 @@ async function runUniversalStream(
     const reader = response.body as any;
     if (!reader) throw new Error("Anthropic response body is empty.");
 
+    // Stream chunks are Uint8Array — String(chunk) would render comma-joined
+    // byte values, so decode them as UTF-8 text.
+    const sseDecoder = new TextDecoder();
     let buffer = "";
     for await (const chunk of reader) {
-      buffer += chunk.toString();
+      buffer += typeof chunk === "string" ? chunk : sseDecoder.decode(chunk, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
@@ -388,9 +391,12 @@ async function runUniversalStream(
   const reader = response.body as any;
   if (!reader) throw new Error(`${provider.toUpperCase()} response body is empty.`);
 
+  // Stream chunks are Uint8Array — String(chunk) would render comma-joined
+  // byte values, so decode them as UTF-8 text.
+  const sseDecoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of reader) {
-    buffer += chunk.toString();
+    buffer += typeof chunk === "string" ? chunk : sseDecoder.decode(chunk, { stream: true });
     const lines = buffer.split("\n");
     buffer = lines.pop() || "";
 
@@ -613,6 +619,11 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
         investigativeAngle: a.investigativeAngle || `Analyze dimension ${idx + 1}`,
         colorTheme: a.colorTheme || "cyan"
       }));
+
+      if (cleanAgents.length === 0) {
+        console.error("Orchestrator returned no agent array. Raw result:", JSON.stringify(result).slice(0, 600));
+        throw new Error("Orchestrator returned no agents — the model produced JSON without an agent list. Try a different orchestrator model or provider.");
+      }
 
       res.json({ agents: cleanAgents });
     } catch (error: any) {
