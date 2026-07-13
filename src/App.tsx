@@ -948,47 +948,53 @@ export default function App() {
               // Process any leftover data in buffer
               const remaining = buffer.trim();
               if (remaining && remaining.startsWith("data: ")) {
+                let data: any = null;
                 try {
-                  const data = JSON.parse(remaining.slice(6));
-                  if (data.type === "chunk" && data.text) {
-                    report += data.text;
-                  } else if (data.type === "error") {
-                    throw new Error(data.error);
-                  }
+                  data = JSON.parse(remaining.slice(6));
                 } catch (e) {
-                  // Ignore
+                  // Ignore partial parse errors
+                }
+                if (data?.type === "chunk" && data.text) {
+                  report += data.text;
+                } else if (data?.type === "error") {
+                  throw new Error(data.error || "Stream error.");
                 }
               }
               break;
             }
             buffer += decoder.decode(value, { stream: true });
-            
+
             let newlineIndex;
             while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
               const lineText = buffer.slice(0, newlineIndex).trim();
               buffer = buffer.slice(newlineIndex + 1);
-              
+
               if (lineText.startsWith("data: ")) {
+                let data: any = null;
                 try {
-                  const data = JSON.parse(lineText.slice(6));
-                  if (data.type === "chunk" && data.text) {
-                    report += data.text;
-                    setSession(prev => {
-                      if (!prev) return null;
-                      return {
-                        ...prev,
-                        agents: prev.agents.map(a => a.id === agent.id ? { ...a, report } : a)
-                      };
-                    });
-                  } else if (data.type === "error") {
-                    throw new Error(data.error);
-                  }
+                  data = JSON.parse(lineText.slice(6));
                 } catch (e) {
-                  // Ignore parse errors
+                  // Ignore partial parse errors
+                }
+                if (data?.type === "chunk" && data.text) {
+                  report += data.text;
+                  setSession(prev => {
+                    if (!prev) return null;
+                    return {
+                      ...prev,
+                      agents: prev.agents.map(a => a.id === agent.id ? { ...a, report } : a)
+                    };
+                  });
+                } else if (data?.type === "error") {
+                  throw new Error(data.error || "Stream error.");
                 }
               }
             }
           }
+        }
+
+        if (!report.trim()) {
+          throw new Error("Provider returned no content. Check API key and model in Settings, and the server console for details.");
         }
 
         clearInterval(intervalId);
@@ -1032,7 +1038,7 @@ export default function App() {
       // 1s settle delay between sequential runs
       await new Promise(r => setTimeout(r, 1000));
     }
-    const validReports = results.filter(r => r.report !== null);
+    const validReports = results.filter(r => r.report && r.report.trim());
 
     if (validReports.length === 0) {
       addLog("ORCHESTRATOR", "Swarm execution critical failure. No investigative reports returned.", "warning");
@@ -1080,15 +1086,16 @@ export default function App() {
               if (done) {
                 const remaining = buffer.trim();
                 if (remaining && remaining.startsWith("data: ")) {
+                  let data: any = null;
                   try {
-                    const data = JSON.parse(remaining.slice(6));
-                    if (data.type === "chunk" && data.text) {
-                      critiqueText += data.text;
-                    } else if (data.type === "error") {
-                      throw new Error(data.error);
-                    }
+                    data = JSON.parse(remaining.slice(6));
                   } catch (e) {
-                    // Ignore
+                    // Ignore partial parse errors
+                  }
+                  if (data?.type === "chunk" && data.text) {
+                    critiqueText += data.text;
+                  } else if (data?.type === "error") {
+                    throw new Error(data.error || "Stream error.");
                   }
                 }
                 break;
@@ -1101,16 +1108,17 @@ export default function App() {
                 buffer = buffer.slice(newlineIndex + 1);
 
                 if (lineText.startsWith("data: ")) {
+                  let data: any = null;
                   try {
-                    const data = JSON.parse(lineText.slice(6));
-                    if (data.type === "chunk" && data.text) {
-                      critiqueText += data.text;
-                      setRedTeamStreamingCritique(critiqueText);
-                    } else if (data.type === "error") {
-                      throw new Error(data.error);
-                    }
+                    data = JSON.parse(lineText.slice(6));
                   } catch (e) {
-                    // Ignore parse errors
+                    // Ignore partial parse errors
+                  }
+                  if (data?.type === "chunk" && data.text) {
+                    critiqueText += data.text;
+                    setRedTeamStreamingCritique(critiqueText);
+                  } else if (data?.type === "error") {
+                    throw new Error(data.error || "Stream error.");
                   }
                 }
               }
@@ -1203,50 +1211,56 @@ export default function App() {
             // Process any leftover data in buffer
             const remaining = buffer.trim();
             if (remaining && remaining.startsWith("data: ")) {
+              let data: any = null;
               try {
-                const data = JSON.parse(remaining.slice(6));
-                if (data.type === "chunk" && data.text) {
-                  finalReport += data.text;
-                } else if (data.type === "done" && data.text) {
-                  finalReport = data.text;
-                } else if (data.type === "error") {
-                  throw new Error(data.error);
-                }
+                data = JSON.parse(remaining.slice(6));
               } catch (e) {
-                // Ignore
+                // Ignore partial parse errors
+              }
+              if (data?.type === "chunk" && data.text) {
+                finalReport += data.text;
+              } else if (data?.type === "done" && data.text) {
+                finalReport = data.text;
+              } else if (data?.type === "error") {
+                throw new Error(data.error || "Stream error.");
               }
             }
             break;
           }
           buffer += decoder.decode(value, { stream: true });
-          
+
           let newlineIndex;
           while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
             const lineText = buffer.slice(0, newlineIndex).trim();
             buffer = buffer.slice(newlineIndex + 1);
-            
+
             if (lineText.startsWith("data: ")) {
+              let data: any = null;
               try {
-                const data = JSON.parse(lineText.slice(6));
-                if (data.type === "chunk" && data.text) {
-                  finalReport += data.text;
-                  setSession(prev => {
-                    if (!prev) return null;
-                    return { ...prev, synthesizedReport: finalReport };
-                  });
-                } else if (data.type === "done") {
-                  if (data.text) {
-                    finalReport = data.text;
-                  }
-                } else if (data.type === "error") {
-                  throw new Error(data.error);
-                }
+                data = JSON.parse(lineText.slice(6));
               } catch (e) {
-                // Ignore parse errors
+                // Ignore partial parse errors
+              }
+              if (data?.type === "chunk" && data.text) {
+                finalReport += data.text;
+                setSession(prev => {
+                  if (!prev) return null;
+                  return { ...prev, synthesizedReport: finalReport };
+                });
+              } else if (data?.type === "done") {
+                if (data.text) {
+                  finalReport = data.text;
+                }
+              } else if (data?.type === "error") {
+                throw new Error(data.error || "Stream error.");
               }
             }
           }
         }
+      }
+
+      if (!finalReport.trim()) {
+        throw new Error("Synthesis returned no content — the provider stream was empty. Check model settings and the server console.");
       }
 
       addLog("ORCHESTRATOR", "Unified Swarm Synthesis Report assembled and validated against cross-discipline vectors.", "success");
