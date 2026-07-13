@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import PixelAvatar from "./components/PixelAvatar";
+import SwarmNetwork from "./components/SwarmNetwork";
 import { Agent, AgentStatus, ResearchSession, SessionStatus } from "./types";
 
 const SAMPLE_TOPICS = [
@@ -215,6 +216,13 @@ export default function App() {
   const [regeneratingAgentId, setRegeneratingAgentId] = useState<string | null>(null);
   const [nudgeTexts, setNudgeTexts] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
+  const [swarmViewMode, setSwarmViewMode] = useState<"grid" | "network">(
+    () => (localStorage.getItem("research_swarm_view_mode") as "grid" | "network") || "network"
+  );
+
+  useEffect(() => {
+    localStorage.setItem("research_swarm_view_mode", swarmViewMode);
+  }, [swarmViewMode]);
 
   const handleCopyReport = (text: string) => {
     if (!text) return;
@@ -850,7 +858,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v2.5.0
+                v2.6.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -1311,8 +1319,42 @@ export default function App() {
                 <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest font-mono">
                   Swarm Agents Status ({session.agents.length})
                 </h3>
+                {(session.status === "researching" || session.status === "synthesizing") && (
+                  <div className="flex items-center gap-1 bg-bg-surface border border-border-warm rounded-lg p-0.5">
+                    <button
+                      onClick={() => setSwarmViewMode("grid")}
+                      className={`px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-widest rounded-md transition-all cursor-pointer ${
+                        swarmViewMode === "grid"
+                          ? "bg-bg-primary border border-border-hi-warm text-accent-warm"
+                          : "text-text-muted hover:text-text-secondary"
+                      }`}
+                    >
+                      Grid
+                    </button>
+                    <button
+                      onClick={() => setSwarmViewMode("network")}
+                      className={`px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-widest rounded-md transition-all cursor-pointer ${
+                        swarmViewMode === "network"
+                          ? "bg-bg-primary border border-border-hi-warm text-accent-warm"
+                          : "text-text-muted hover:text-text-secondary"
+                      }`}
+                    >
+                      Network
+                    </button>
+                  </div>
+                )}
               </div>
 
+              {swarmViewMode === "network" && (session.status === "researching" || session.status === "synthesizing") ? (
+                <SwarmNetwork
+                  agents={session.agents}
+                  agentProgress={agentProgress}
+                  sessionStatus={session.status}
+                  onSelectAgent={(a) => {
+                    if (a.status === "completed") setViewingCompletedAgent(a);
+                  }}
+                />
+              ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {session.agents.map((agent, idx) => {
                   const isVisible = assemblyStep > idx || session.status !== "assembling";
@@ -1473,6 +1515,7 @@ export default function App() {
                   );
                 })}
               </div>
+              )}
             </div>
           )}
 
