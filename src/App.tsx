@@ -39,11 +39,13 @@ import {
   Minus,
   Plus,
   UserPlus,
-  SlidersHorizontal
+  SlidersHorizontal,
+  MessagesSquare
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
+import InterrogationRoom from "./components/InterrogationRoom";
 import { Agent, AgentStatus, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
 const SAMPLE_TOPICS = [
@@ -1020,7 +1022,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v2.7.0
+                v2.8.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -1794,6 +1796,27 @@ export default function App() {
 
                   <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
 
+                  {/* Interrogation Room */}
+                  <button
+                    id="tab-interrogation-room"
+                    onClick={() => setActiveReportViewerId("interrogate")}
+                    className={`px-4 h-14 flex items-center gap-2 border-b-2 font-mono text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap ${
+                      activeReportViewerId === "interrogate"
+                        ? "border-accent-warm text-text-primary bg-bg-primary"
+                        : "border-transparent text-text-muted hover:text-text-secondary"
+                    }`}
+                  >
+                    <MessagesSquare className="w-3.5 h-3.5 text-accent-warm" />
+                    Interrogation Room
+                    {session.chat && session.chat.length > 0 && (
+                      <span className="min-w-4 h-4 px-1 flex items-center justify-center rounded-full bg-accent-warm/15 border border-accent-warm/30 text-accent-warm text-[9px] font-bold">
+                        {session.chat.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
+
                   {/* Individual Specialist Dossiers */}
                   {session.agents.map((agent) => (
                     <button
@@ -1842,7 +1865,15 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Document Container */}
+              {/* Interrogation Room OR Document Container */}
+              {activeReportViewerId === "interrogate" ? (
+                <InterrogationRoom
+                  session={session}
+                  settings={settings}
+                  onPersist={(updated) => { setSession(updated); saveToHistory(updated); }}
+                  getAgentColorHex={getAgentColorHex}
+                />
+              ) : (
               <div id="report-view-scroll" className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">
                 <div className="max-w-3xl mx-auto">
                   {activeReportViewerId === "synthesis" ? (
@@ -1961,6 +1992,7 @@ export default function App() {
                   )}
                 </div>
               </div>
+              )}
             </div>
           )}
         </section>

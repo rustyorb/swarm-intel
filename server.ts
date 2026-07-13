@@ -847,6 +847,119 @@ STYLE GUIDELINES:
     }
   });
 
+  // 4. Interrogation Room Endpoint - Chat with the completed swarm via SSE (grounded, no web search)
+  app.post("/api/research/interrogate-stream", async (req, res) => {
+    try {
+      const { topic, question, respondent, agents, synthesizedReport, chatHistory, settings } = req.body;
+
+      if (!question || typeof question !== "string" || !question.trim()) {
+        return res.status(400).json({ error: "A non-empty question is required." });
+      }
+      if (!agents || !Array.isArray(agents) || agents.length === 0) {
+        return res.status(400).json({ error: "A non-empty agents array is required." });
+      }
+
+      const isPanel = respondent === "panel";
+      const targetAgent = isPanel ? null : agents.find((a: any) => a && a.id === respondent);
+
+      console.log(`Interrogating swarm [${isPanel ? "PANEL" : (targetAgent ? targetAgent.name : respondent)}] for topic: "${topic}"`);
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+
+      // Build the grounding intelligence dossier
+      let intelligence = "";
+      if (isPanel) {
+        intelligence += `## CONSOLIDATED SYNTHESIS\n${synthesizedReport || "(no synthesis available)"}\n\n`;
+        intelligence += agents
+          .filter((a: any) => a && a.report)
+          .map((a: any) => `## SPECIALIST REPORT — ${a.name} (${a.role})\nInvestigative angle: ${a.investigativeAngle || "n/a"}\n\n${a.report}`)
+          .join("\n\n---\n\n");
+      } else {
+        intelligence += `## CONSOLIDATED SYNTHESIS (shared context)\n${(synthesizedReport || "(no synthesis available)").slice(0, 4000)}\n\n`;
+        if (targetAgent) {
+          intelligence += `## YOUR OWN FULL REPORT — ${targetAgent.name} (${targetAgent.role})\nInvestigative angle: ${targetAgent.investigativeAngle || "n/a"}\n\n${targetAgent.report || "(no report on file)"}`;
+        }
+      }
+
+      const history = Array.isArray(chatHistory) ? chatHistory.slice(-8) : [];
+      const historyBlock = history.length
+        ? "\n\nPRIOR CONVERSATION:\n" + history.map((m: any) => `${m.role === "user" ? "USER" : (m.speaker || "SWARM")}: ${m.content}`).join("\n")
+        : "";
+
+      let systemInstruction: string;
+      let prompt: string;
+      let taskRole: "synthesis" | "agent";
+
+      if (isPanel) {
+        taskRole = "synthesis";
+        systemInstruction = "You are the Swarm Intelligence panel — the collective voice of the specialist agents plus the lead orchestrator who synthesized their findings. You answer follow-up interrogations strictly from the intelligence already gathered, never from outside knowledge.";
+        prompt = `TOPIC: "${topic}"
+
+A user is interrogating the swarm with a follow-up question. Answer using ONLY the intelligence dossier below. Do not introduce outside facts and do not speculate beyond what the specialists reported.
+
+INTELLIGENCE DOSSIER:
+${intelligence}${historyBlock}
+
+USER QUESTION: "${question}"
+
+RESPONSE REQUIREMENTS:
+- Answer strictly from the intelligence above. If it does not cover the question, say so plainly, state exactly what is missing, and name which specialist angle (by role) would need a follow-up investigation to close the gap.
+- Attribute key points to the specialists who made them, by name, where relevant (e.g., "Dr. Vance's analysis indicates..."). Surface where the specialists agree and where they diverge.
+- Keep the answer focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
+      } else {
+        taskRole = "agent";
+        const name = targetAgent?.name || "Specialist";
+        const role = targetAgent?.role || "Investigator";
+        systemInstruction = `You are ${name}, an expert ${role} who investigated this topic as part of a research swarm. You are being interrogated directly about your findings. Stay fully in persona and answer only from the intelligence you gathered.`;
+        prompt = `TOPIC: "${topic}"
+
+A user is interrogating you directly about your investigation. Stay fully in persona: answer in the FIRST PERSON, in your own voice and expertise as a ${role}. Answer using ONLY the intelligence below — your own report is authoritative, and the synthesis is provided for shared context. Do not invent facts beyond what you reported.
+
+YOUR INVESTIGATION & SHARED CONTEXT:
+${intelligence}${historyBlock}
+
+USER QUESTION: "${question}"
+
+RESPONSE REQUIREMENTS:
+- Respond in character as ${name}, first person, drawing on your expertise as a ${role}.
+- Answer strictly from the intelligence above. If your investigation did not cover the question, say so directly and suggest which angle — yours or a colleague's — would need a follow-up investigation.
+- Keep it focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
+      }
+
+      const pingInterval = setInterval(() => {
+        res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+      }, 5000);
+
+      try {
+        await runUniversalStream(
+          taskRole,
+          settings,
+          prompt,
+          systemInstruction,
+          false,
+          (text: string) => {
+            res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
+          }
+        );
+
+        clearInterval(pingInterval);
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        res.end();
+      } catch (error: any) {
+        clearInterval(pingInterval);
+        throw error;
+      }
+    } catch (error: any) {
+      console.error("Error in /api/research/interrogate-stream:", error);
+      res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Interrogation failed." })}\n\n`);
+      res.end();
+    }
+  });
+
   // Vite middleware / client routing setup
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

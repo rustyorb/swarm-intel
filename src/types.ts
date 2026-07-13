@@ -18,6 +18,16 @@ export interface SwarmConfig {
   depth: "recon" | "standard" | "deep";
 }
 
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  respondent: string;        // "panel" or agent id
+  respondentName: string;    // "Full Panel" or agent name
+  respondentColor?: string;  // agent colorTheme, undefined for panel
+  content: string;
+  timestamp: string;
+}
+
 export interface ResearchSession {
   id: string;
   topic: string;
@@ -27,4 +37,5 @@ export interface ResearchSession {
   status: SessionStatus;
   error?: string;
   config?: SwarmConfig;
+  chat?: ChatMessage[];
 }

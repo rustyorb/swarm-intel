@@ -190,6 +190,7 @@ All routes are served by `server.ts` on port 3000.
 | `POST` | `/api/research/regenerate-agent` | Redesign a single agent, optionally guided by a user nudge. | JSON |
 | `POST` | `/api/research/agent-run-stream` | Run one agent's deep investigation. | SSE |
 | `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. | SSE |
+| `POST` | `/api/research/interrogate-stream` | Answer a follow-up question grounded in the session's reports, as the full panel or a single specialist in persona. | SSE |
 
 The two streaming endpoints emit `data:` events with a `type` field of `ping`, `chunk`, `done`, or `error`. A 5-second `ping` keeps the connection alive during long generations.
 
@@ -243,6 +244,7 @@ The app keeps state in the browser under these `localStorage` keys:
 | --- | --- |
 | v2.6.0 | Mission Control — live animated swarm network visualization (orchestrator hub, agent nodes, packet flows, live progress rings; Grid/Network toggle) |
 | v2.7.0 | Swarm Config — mission parameters (swarm size 3–9, Recon/Standard/Deep depth modes honored by all three pipeline stages), custom specialist recruitment with live avatar preview, and node dismissal at approval |
+| v2.8.0 | Interrogation Room — chat with the completed swarm: follow-up questions answered strictly from the reports, streamed live, with respondent selection (Full Panel synthesis voice or any specialist in persona); chats persist with the session |
 
 ---
 
