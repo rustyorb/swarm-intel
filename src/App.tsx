@@ -25,7 +25,11 @@ import {
   ShieldCheck,
   RefreshCw,
   Terminal,
-  Clock
+  Clock,
+  Copy,
+  Download,
+  Check,
+  X
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import PixelAvatar from "./components/PixelAvatar";
@@ -118,6 +122,112 @@ export default function App() {
   // Animation & simulation states
   const [assemblyStep, setAssemblyStep] = useState(0);
   const logContainerRef = useRef<HTMLDivElement>(null);
+
+  const [viewingCompletedAgent, setViewingCompletedAgent] = useState<Agent | null>(null);
+  const [regeneratingAgentId, setRegeneratingAgentId] = useState<string | null>(null);
+  const [nudgeTexts, setNudgeTexts] = useState<Record<string, string>>({});
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyReport = (text: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleSaveReport = (text: string, title: string) => {
+    if (!text) return;
+    const blob = new Blob([text], { type: "text/markdown;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const safeTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 50);
+    link.setAttribute("download", `${safeTitle}_report.md`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleApproveAndStartResearch = () => {
+    if (!session) return;
+    const updated: ResearchSession = { ...session, status: "researching" };
+    setSession(updated);
+    setTimeout(() => {
+      runParallelResearch(updated);
+    }, 0);
+  };
+
+  const handleRegenerateSingleAgent = async (agentId: string) => {
+    if (!session) return;
+    const nudge = nudgeTexts[agentId] || "";
+    setRegeneratingAgentId(agentId);
+    
+    addLog("ORCHESTRATOR", `Requesting revision for Agent Node [${agentId}]... Nudge: "${nudge || "none"}"`, "system");
+    
+    try {
+      const response = await fetch("/api/research/regenerate-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: session.topic,
+          agents: session.agents,
+          agentIdToRegenerate: agentId,
+          nudge: nudge
+        }),
+      });
+
+      if (!response.ok) {
+        let errorMsg = "Failed to regenerate agent.";
+        try {
+          const errorData = await response.json();
+          if (errorData.error) errorMsg = errorData.error;
+        } catch (e) {}
+        throw new Error(errorMsg);
+      }
+
+      const data = await response.json();
+      const newAgent: Agent = {
+        ...data.agent,
+        status: "idle" as AgentStatus
+      };
+
+      setSession(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          agents: prev.agents.map(a => a.id === agentId ? newAgent : a)
+        };
+      });
+
+      addLog("ORCHESTRATOR", `Agent Node [${agentId}] revised successfully as ${newAgent.name} [${newAgent.role}].`, "success", newAgent.colorTheme);
+      
+      setNudgeTexts(prev => {
+        const copy = { ...prev };
+        delete copy[agentId];
+        return copy;
+      });
+    } catch (err: any) {
+      addLog("SYSTEM", `Agent Revision Error: ${err.message}`, "warning");
+    } finally {
+      setRegeneratingAgentId(null);
+    }
+  };
+
+  const getActiveReportContentAndTitle = (): { text: string; title: string } => {
+    if (!session) return { text: "", title: "" };
+    if (activeReportViewerId === "synthesis") {
+      return { 
+        text: session.synthesizedReport || "", 
+        title: `${session.topic} - Consolidated Synthesis` 
+      };
+    }
+    const agent = session.agents.find(a => a.id === activeReportViewerId);
+    return { 
+      text: agent?.report || "", 
+      title: agent ? `${agent.name} (${agent.role}) - Specialist Dossier` : "" 
+    };
+  };
 
   // Load history, session, and logs from localStorage on mount
   useEffect(() => {
@@ -258,12 +368,11 @@ export default function App() {
         }
       }
 
-      // Transition to Research stage
+      // Transition to Approval stage
       setSession(prev => {
         if (!prev) return null;
-        const updated = { ...prev, status: "researching" as SessionStatus };
-        runParallelResearch(updated);
-        return updated;
+        addLog("ORCHESTRATOR", "Swarm assembly complete. Thread locks engaged. Awaiting specialist team verification...", "system");
+        return { ...prev, status: "approval" as SessionStatus };
       });
 
     } catch (err: any) {
@@ -348,8 +457,6 @@ export default function App() {
           body: JSON.stringify({ topic: currentSession.topic, agent }),
         });
 
-        clearInterval(intervalId);
-
         if (!response.ok) {
           throw new Error("Investigation thread timed out or failed.");
         }
@@ -409,6 +516,8 @@ export default function App() {
           }
         }
 
+        clearInterval(intervalId);
+
         // Complete progress
         setAgentProgress(prev => ({
           ...prev,
@@ -459,10 +568,16 @@ export default function App() {
     // Trigger synthesis
     setSession(prev => {
       if (!prev) return null;
-      const nextSession = { ...prev, status: "synthesizing" as SessionStatus };
-      runSynthesis(nextSession, validReports);
-      return nextSession;
+      return { ...prev, status: "synthesizing" as SessionStatus };
     });
+    setTimeout(() => {
+      setSession(prev => {
+        if (prev) {
+          runSynthesis(prev, validReports);
+        }
+        return prev;
+      });
+    }, 0);
   };
 
   // Synthesis Call
@@ -585,6 +700,8 @@ export default function App() {
     if (session.status === "completed") return 100;
     return Math.round(average);
   };
+
+  const { text: activeText, title: activeTitle } = getActiveReportContentAndTitle();
 
   return (
     <div className="w-full h-screen bg-bg-primary text-text-secondary font-sans flex flex-col overflow-hidden">
@@ -974,7 +1091,7 @@ export default function App() {
           )}
 
           {/* Swarm Running / Assembly Screen */}
-          {session && (session.status === "assembling" || session.status === "researching" || session.status === "synthesizing") && (
+          {session && (session.status === "assembling" || session.status === "approval" || session.status === "researching" || session.status === "synthesizing") && (
             <div className="flex-1 flex flex-col p-6 overflow-y-auto">
               {/* Header section */}
               <div className="border border-border-warm rounded-2xl bg-bg-surface p-6 mb-6">
@@ -988,9 +1105,14 @@ export default function App() {
                     </h2>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 bg-bg-primary px-3.5 py-1.5 rounded-xl border border-border-warm font-mono text-[11px]">
-                    <Clock className="w-3.5 h-3.5 text-accent-warm animate-spin" style={{ animationDuration: '3s' }} />
-                    <span className="text-text-secondary uppercase">
+                    {session.status === "approval" ? (
+                      <ShieldCheck className="text-accent-warm w-3.5 h-3.5" />
+                    ) : (
+                      <Clock className="w-3.5 h-3.5 text-accent-warm animate-spin" style={{ animationDuration: "3s" }} />
+                    )}
+                    <span className="text-text-secondary uppercase font-semibold">
                       {session.status === "assembling" && "ASSEMBLING_SWARM"}
+                      {session.status === "approval" && "AWAITING_APPROVAL"}
                       {session.status === "researching" && "RUNNING_CHANNELS"}
                       {session.status === "synthesizing" && "COMPILING_REPORTS"}
                     </span>
@@ -999,8 +1121,44 @@ export default function App() {
 
                 <div className="flex items-center gap-2 text-xs text-text-secondary">
                   <Activity className="w-3.5 h-3.5 text-accent-warm animate-pulse" />
-                  <span>The Lead Orchestrator has spun up {session.agents.length} thread instances running concurrently.</span>
+                  <span>
+                    {session.status === "approval" 
+                      ? "The specialist team configuration is finalized and awaiting your tactical validation."
+                      : `The Lead Orchestrator has spun up ${session.agents.length} thread instances running concurrently.`
+                    }
+                  </span>
                 </div>
+
+                {session.status === "approval" && (
+                  <div className="mt-5 pt-5 border-t border-border-warm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                    <div className="max-w-xl">
+                      <h4 className="text-xs font-bold text-accent-warm uppercase tracking-widest font-mono mb-1">
+                        Tactical Swarm Control Board
+                      </h4>
+                      <p className="text-[11px] text-text-muted leading-relaxed">
+                        Customize any agent node focus by entering an adjustment nudge directly on their card below. Alternatively, regenerate all nodes to rebuild a fresh, multi-disciplinary team.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2.5 w-full md:w-auto">
+                      <button
+                        onClick={() => handleInitiateResearch(session.topic)}
+                        className="flex-1 md:flex-initial h-9 px-4 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Reroll and regenerate all agents from scratch"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Reroll Swarm
+                      </button>
+                      <button
+                        onClick={handleApproveAndStartResearch}
+                        className="flex-1 md:flex-initial h-9 px-5 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-accent-warm/15 font-semibold"
+                        title="Approve agents and start research immediately"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-black" />
+                        Approve & Launch
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Grid of active research specialists */}
@@ -1016,6 +1174,7 @@ export default function App() {
                   const prog = agentProgress[agent.id] || { percent: 0, statusText: "QUEUED" };
                   const colorTheme = agent.colorTheme;
                   const hexColor = getAgentColorHex(colorTheme);
+                  const isCompleted = agent.status === "completed";
 
                   if (!isVisible) {
                     return (
@@ -1035,7 +1194,16 @@ export default function App() {
                   return (
                     <div 
                       key={agent.id}
-                      className="agentsroom-card p-5 flex flex-col shadow-lg transition-all duration-300 relative overflow-hidden"
+                      onClick={() => {
+                        if (isCompleted) {
+                          setViewingCompletedAgent(agent);
+                        }
+                      }}
+                      className={`agentsroom-card p-5 flex flex-col shadow-lg transition-all duration-300 relative overflow-hidden ${
+                        isCompleted 
+                          ? "cursor-pointer hover:border-[var(--agent-accent)] hover:scale-[1.02] focus-within:ring-1 focus-within:ring-[var(--agent-accent)] shadow-md" 
+                          : ""
+                      }`}
                       style={{ "--agent-accent": hexColor } as React.CSSProperties}
                     >
                       {/* Top Header Row */}
@@ -1071,18 +1239,67 @@ export default function App() {
 
                       {/* Progress and Tags Indicator at bottom */}
                       <div className="mt-auto pt-3 border-t border-border-warm space-y-3">
-                        <div>
-                          <div className="flex justify-between items-center text-[9px] font-mono text-text-muted mb-1">
-                            <span className="truncate max-w-[120px] uppercase">{prog.statusText}</span>
-                            <span>{prog.percent}%</span>
+                        {session.status !== "approval" ? (
+                          <div>
+                            <div className="flex justify-between items-center text-[9px] font-mono text-text-muted mb-1">
+                              <span className="truncate max-w-[120px] uppercase">{prog.statusText}</span>
+                              <span>{prog.percent}%</span>
+                            </div>
+                            <div className="h-1 bg-bg-primary rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-[var(--agent-accent)] transition-all duration-300"
+                                style={{ width: `${prog.percent}%` }}
+                              ></div>
+                            </div>
                           </div>
-                          <div className="h-1 bg-bg-primary rounded-full overflow-hidden">
-                            <div 
-                              className="h-full bg-[var(--agent-accent)] transition-all duration-300"
-                              style={{ width: `${prog.percent}%` }}
-                            ></div>
+                        ) : (
+                          /* Approval Customization Input */
+                          <div className="space-y-2.5">
+                            <div className="flex items-center justify-between text-[9px] font-mono text-text-muted">
+                              <span className="uppercase">NODE REVISION FOCUS</span>
+                              {regeneratingAgentId === agent.id ? (
+                                <span className="text-accent-warm animate-pulse">REBUILDING...</span>
+                              ) : (
+                                <span>READY</span>
+                              )}
+                            </div>
+                            
+                            {regeneratingAgentId === agent.id ? (
+                              <div className="h-14 flex flex-col items-center justify-center gap-1.5 border border-dashed border-accent-warm/20 rounded-xl bg-accent-warm/5">
+                                <RefreshCw className="w-3.5 h-3.5 text-accent-warm animate-spin" />
+                                <span className="text-[9px] font-mono text-text-secondary">Generating fresh perspective...</span>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <input
+                                  type="text"
+                                  value={nudgeTexts[agent.id] || ""}
+                                  onChange={(e) => setNudgeTexts(prev => ({ ...prev, [agent.id]: e.target.value }))}
+                                  placeholder="Focus angle adjustment (e.g. emphasize security)..."
+                                  className="w-full bg-bg-primary text-text-primary placeholder:text-text-muted/50 text-[10px] px-2.5 py-1.5 rounded-lg border border-border-warm focus:outline-none focus:border-accent-warm transition-all font-mono"
+                                  onClick={(e) => e.stopPropagation()} // prevent card click
+                                  onKeyDown={(e) => {
+                                    e.stopPropagation();
+                                    if (e.key === "Enter") {
+                                      handleRegenerateSingleAgent(agent.id);
+                                    }
+                                  }}
+                                />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRegenerateSingleAgent(agent.id);
+                                  }}
+                                  disabled={regeneratingAgentId !== null}
+                                  className="w-full h-7 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  Regenerate Node
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        </div>
+                        )}
 
                         {/* Semantic Tag List */}
                         {tags.length > 0 && (
@@ -1095,6 +1312,15 @@ export default function App() {
                                 #{tag}
                               </span>
                             ))}
+                          </div>
+                        )}
+
+                        {isCompleted && (
+                          <div className="pt-1 text-right flex justify-end">
+                            <span className="text-[9px] font-mono font-bold text-[var(--agent-accent)] uppercase tracking-wider flex items-center gap-1 hover:underline">
+                              <BookOpen className="w-3 h-3" />
+                              View Dossier
+                            </span>
                           </div>
                         )}
                       </div>
@@ -1197,8 +1423,34 @@ export default function App() {
                   ))}
                 </div>
 
-                <div className="text-right text-[10px] text-text-muted font-mono hidden sm:block">
-                  TOPIC COMPLETED & VERIFIED
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => handleCopyReport(activeText)}
+                    disabled={!activeText}
+                    className="h-8 px-3 bg-bg-primary hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Copy full markdown report to clipboard"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-success" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        Copy Report
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleSaveReport(activeText, activeTitle)}
+                    disabled={!activeText}
+                    className="h-8 px-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Save report to local storage as .md file"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Save Report
+                  </button>
                 </div>
               </div>
 
@@ -1423,6 +1675,130 @@ export default function App() {
           Intelligence Swarm Architecture © 2026. All Threads Operating Within Nominal Bounds.
         </div>
       </footer>
+
+      {/* Completed Agent Dossier View Modal */}
+      {viewingCompletedAgent && (
+        <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-3xl h-[85vh] bg-bg-surface border border-border-warm rounded-2xl flex flex-col overflow-hidden shadow-2xl relative">
+            
+            {/* Header */}
+            <div className="p-5 border-b border-border-warm flex items-center justify-between bg-bg-primary/50 flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <PixelAvatar 
+                  name={viewingCompletedAgent.name} 
+                  role={viewingCompletedAgent.role} 
+                  themeColor={viewingCompletedAgent.colorTheme} 
+                  size="sm" 
+                />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold text-text-primary font-display">
+                      {viewingCompletedAgent.name}
+                    </h3>
+                    <span 
+                      className="text-[9px] font-mono font-medium px-2 py-0.5 rounded border"
+                      style={{ 
+                        color: getAgentColorHex(viewingCompletedAgent.colorTheme), 
+                        borderColor: `${getAgentColorHex(viewingCompletedAgent.colorTheme)}30`,
+                        backgroundColor: `${getAgentColorHex(viewingCompletedAgent.colorTheme)}08`
+                      }}
+                    >
+                      {viewingCompletedAgent.role.toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-text-muted font-mono mt-0.5">
+                    Completed Specialist Dossier • Real-Time Research Thread
+                  </p>
+                </div>
+              </div>
+
+              {/* Close Button */}
+              <button
+                onClick={() => setViewingCompletedAgent(null)}
+                className="w-8 h-8 rounded-full border border-border-warm bg-bg-surface text-text-muted hover:text-text-primary flex items-center justify-center transition-all cursor-pointer"
+                title="Close dossier"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Dossier Meta/Angle */}
+            <div className="px-6 py-4 bg-bg-primary/20 border-b border-border-warm flex-shrink-0">
+              <span className="text-[9px] font-mono font-bold text-text-muted uppercase tracking-wider block mb-1">
+                Assigned Investigative Angle
+              </span>
+              <p className="text-xs text-text-secondary italic">
+                "{viewingCompletedAgent.investigativeAngle}"
+              </p>
+            </div>
+
+            {/* Markdown Content scroll container */}
+            <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">
+              <article className="prose prose-invert max-w-none text-text-secondary">
+                <div className="space-y-4 text-xs leading-relaxed font-sans text-text-secondary md:text-sm">
+                  {viewingCompletedAgent.report ? (
+                    <ReactMarkdown
+                      components={{
+                        h1: ({ node, ...props }) => <h1 className="text-xl font-bold text-text-primary mt-6 mb-3 border-b border-border-warm pb-1.5 font-display" {...props} />,
+                        h2: ({ node, ...props }) => <h2 className="text-lg font-semibold text-text-primary mt-5 mb-2.5 font-display" {...props} />,
+                        h3: ({ node, ...props }) => <h3 className="text-base font-semibold text-accent-warm mt-4 mb-2 font-display" {...props} />,
+                        p: ({ node, ...props }) => <p className="mb-4 leading-relaxed text-text-secondary text-xs sm:text-sm" {...props} />,
+                        ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-4 space-y-1" {...props} />,
+                        ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-4 space-y-1" {...props} />,
+                        li: ({ node, ...props }) => <li className="text-text-secondary text-xs sm:text-sm" {...props} />,
+                        blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-accent-warm bg-bg-surface p-4 rounded-r-lg italic my-4 text-text-muted" {...props} />,
+                        code: ({ node, ...props }) => <code className="bg-bg-primary text-accent-warm px-1.5 py-0.5 rounded font-mono text-xs border border-border-warm" {...props} />,
+                        pre: ({ node, ...props }) => <pre className="bg-bg-primary p-4 rounded-xl overflow-x-auto border border-border-warm my-4 text-xs font-mono text-text-secondary" {...props} />,
+                      }}
+                    >
+                      {viewingCompletedAgent.report}
+                    </ReactMarkdown>
+                  ) : (
+                    <div className="p-8 text-center text-text-muted font-mono bg-bg-primary rounded-xl border border-dashed border-border-warm">
+                      Thread empty. This specialist has not saved any content yet.
+                    </div>
+                  )}
+                </div>
+              </article>
+            </div>
+
+            {/* Footer with copy/download */}
+            <div className="p-4 border-t border-border-warm bg-bg-surface flex items-center justify-between flex-shrink-0">
+              <span className="text-[9px] font-mono text-text-muted uppercase tracking-wider">
+                Authorized Node Intelligence
+              </span>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleCopyReport(viewingCompletedAgent.report || "")}
+                  disabled={!viewingCompletedAgent.report}
+                  className="h-8 px-3 bg-bg-primary hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {copied ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-success" />
+                      Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      Copy Dossier
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => handleSaveReport(viewingCompletedAgent.report || "", `${viewingCompletedAgent.name} (${viewingCompletedAgent.role}) Dossier`)}
+                  disabled={!viewingCompletedAgent.report}
+                  className="h-8 px-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-mono font-bold rounded-lg uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Save Dossier
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }

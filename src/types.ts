@@ -11,7 +11,7 @@ export interface Agent {
   error?: string;
 }
 
-export type SessionStatus = "idle" | "assembling" | "researching" | "synthesizing" | "completed" | "failed";
+export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "synthesizing" | "completed" | "failed";
 
 export interface ResearchSession {
   id: string;

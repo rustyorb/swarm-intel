@@ -175,6 +175,76 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
     }
   });
 
+  // 1.5. Regenerate Single Agent Endpoint with Nudge
+  app.post("/api/research/regenerate-agent", async (req, res) => {
+    try {
+      const { topic, agents, agentIdToRegenerate, nudge } = req.body;
+      if (!topic || !agents || !agentIdToRegenerate) {
+        return res.status(400).json({ error: "Topic, agents list, and agentIdToRegenerate are required." });
+      }
+
+      console.log(`Regenerating agent ${agentIdToRegenerate} for topic: "${topic}" with nudge: "${nudge || "none"}"`);
+
+      const otherAgents = agents.filter((a: any) => a.id !== agentIdToRegenerate);
+      const otherAgentsContext = otherAgents
+        .map((a: any) => `- ${a.name} (${a.role}): ${a.investigativeAngle}`)
+        .join("\n");
+
+      const prompt = `Topic: "${topic}"
+Existing research team:
+${otherAgentsContext || "None"}
+
+The user wants to replace/regenerate the specialist agent node that has ID: "${agentIdToRegenerate}".
+${nudge ? `The user provided the following design NUDGE/CRITIQUE to guide this new agent's role and focus: "${nudge}"` : "Please refresh this agent to complement the rest of the team."}
+
+Design a fresh, new replacement research specialist agent.
+The replacement agent MUST have a unique, creative name (completely different from other existing agents), a highly specialized role/title, a detailed investigative instruction/angle, and a theme color (one of: cyan, emerald, rose, amber, purple, indigo, blue, fuchsia).
+Ensure the new agent is distinct and does not replicate the other existing agents, but complements them perfectly.`;
+
+      const response = await generateWithRetry({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "You are an elite Research Swarm Orchestrator. Your task is to design a high-fidelity specialized agent to replace an existing node in a research team, strictly adhering to the user's focus nudge.",
+          responseMimeType: "application/json",
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+          ],
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              id: { type: Type.STRING, description: "Must be the exact ID of the agent being replaced: " + agentIdToRegenerate },
+              name: { type: Type.STRING, description: "A unique, creative name for the replacement specialist agent" },
+              role: { type: Type.STRING, description: "A detailed role or specialty title for the replacement agent" },
+              investigativeAngle: { type: Type.STRING, description: "A specific investigative query/angle addressing the nudge and topic" },
+              colorTheme: { type: Type.STRING, description: "A color name (choose one of: cyan, emerald, rose, amber, purple, indigo, blue, fuchsia)" },
+            },
+            required: ["id", "name", "role", "investigativeAngle", "colorTheme"],
+          },
+        },
+      });
+
+      const text = response.text;
+      if (!text) {
+        throw new Error("No response received from the orchestrator model.");
+      }
+
+      let cleanText = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+      let replacementAgent = JSON.parse(cleanText);
+      
+      // Make sure the ID is correct
+      replacementAgent.id = agentIdToRegenerate;
+
+      res.json({ agent: replacementAgent });
+    } catch (error: any) {
+      console.error("Error in /api/research/regenerate-agent:", error);
+      res.status(500).json({ error: error.message || "Failed to regenerate specialist agent." });
+    }
+  });
+
   // 2. Agent Research Run Endpoint - Executes a single agent investigation via SSE
   app.post("/api/research/agent-run-stream", async (req, res) => {
     try {
