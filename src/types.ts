@@ -38,4 +38,7 @@ export interface ResearchSession {
   error?: string;
   config?: SwarmConfig;
   chat?: ChatMessage[];
+  favorite?: boolean;
+  tags?: string[];
+  label?: string;
 }

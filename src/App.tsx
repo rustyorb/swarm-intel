@@ -43,7 +43,8 @@ import {
   MessagesSquare,
   FileDown,
   Printer,
-  BookOpenText
+  BookOpenText,
+  LibraryBig
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -51,6 +52,7 @@ import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
 import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
+import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import { buildDossierHtml } from "./lib/dossier";
 import { Agent, AgentStatus, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
@@ -241,6 +243,7 @@ export default function App() {
   const [agentProgress, setAgentProgress] = useState<Record<string, { percent: number; statusText: string }>>({});
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [settingsTab, setSettingsTab] = useState<"providers" | "routing">("providers");
@@ -597,13 +600,65 @@ export default function App() {
     try {
       setHistory(prev => {
         const filtered = prev.filter(s => s.id !== newSession.id);
-        const updated = [newSession, ...filtered].slice(0, 15); // keep last 15
+        const updated = [newSession, ...filtered].slice(0, 50); // keep last 50
         localStorage.setItem("research_swarm_history", JSON.stringify(updated));
         return updated;
       });
     } catch (e) {
       console.error("Failed to save history:", e);
     }
+  };
+
+  // Persist an updated history array to localStorage as we mutate it.
+  const persistHistory = (updated: ResearchSession[]) => {
+    try {
+      localStorage.setItem("research_swarm_history", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to save history:", e);
+    }
+    return updated;
+  };
+
+  // Library mutation helpers — each updates state AND localStorage.
+  const toggleFavorite = (id: string) => {
+    setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, favorite: !s.favorite } : s))));
+  };
+
+  const renameSession = (id: string, label: string) => {
+    const trimmed = label.trim();
+    setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, label: trimmed || undefined } : s))));
+  };
+
+  const deleteSession = (id: string) => {
+    setHistory(prev => persistHistory(prev.filter(s => s.id !== id)));
+  };
+
+  const setSessionTags = (id: string, tags: string[]) => {
+    setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, tags } : s))));
+  };
+
+  const importSessions = (incoming: ResearchSession[]) => {
+    setHistory(prev => {
+      const byId = new Map<string, ResearchSession>();
+      prev.forEach(s => byId.set(s.id, s));
+      incoming.forEach(s => byId.set(s.id, s)); // imported wins
+      const recency = (s: ResearchSession) => {
+        const m = /(\d{10,})/.exec(s.id);
+        if (m) return Number(m[1]);
+        const t = Date.parse(s.timestamp);
+        return isNaN(t) ? 0 : t;
+      };
+      const merged = Array.from(byId.values()).sort((a, b) => recency(b) - recency(a));
+      // Enforce cap 50, evicting non-favorites first (favorites are never dropped before them).
+      let capped = merged;
+      if (merged.length > 50) {
+        const favorites = merged.filter(s => s.favorite);
+        const others = merged.filter(s => !s.favorite);
+        const room = Math.max(0, 50 - favorites.length);
+        capped = [...favorites, ...others.slice(0, room)].sort((a, b) => recency(b) - recency(a));
+      }
+      return persistHistory(capped);
+    });
   };
 
   // Save session to localStorage when it changes
@@ -1068,7 +1123,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v2.9.0
+                v3.0.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -1115,6 +1170,21 @@ export default function App() {
           >
             <Terminal className="w-3.5 h-3.5" />
             <span className="hidden md:inline">{rightSidebarOpen ? "Hide Logs" : "Logs"}</span>
+          </button>
+
+          <button
+            id="btn-open-library"
+            onClick={() => setLibraryOpen(true)}
+            className="px-3 py-2 rounded-lg border border-border-warm bg-bg-surface hover:bg-bg-primary text-text-muted hover:text-text-secondary transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+            title="Open the Knowledge Library"
+          >
+            <LibraryBig className="w-3.5 h-3.5 text-accent-warm" />
+            <span className="hidden md:inline">Library</span>
+            {history.length > 0 && (
+              <span className="text-[9px] font-mono bg-bg-primary border border-border-warm text-text-secondary px-1.5 py-0.5 rounded-full leading-none">
+                {history.length}
+              </span>
+            )}
           </button>
 
           <div className="h-8 w-[1px] bg-border-warm hidden sm:block"></div>
@@ -1321,30 +1391,38 @@ export default function App() {
                 No prior swarms logged
               </div>
             ) : (
-              <div className="space-y-1.5 max-h-[180px] overflow-y-auto pr-1">
-                {history.map((hist) => (
+              <div className="space-y-1.5">
+                {history.slice(0, 5).map((hist) => (
                   <button
                     key={hist.id}
                     onClick={() => {
                       setSession(hist);
                       setTopic(hist.topic);
-                      addLog("SYSTEM", `Restored historic research swarm for: "${hist.topic}"`, "success");
+                      addLog("SYSTEM", `Restored historic research swarm for: "${hist.label || hist.topic}"`, "success");
                     }}
                     className={`w-full text-left p-2.5 rounded border transition-all text-xs flex justify-between items-center gap-2 cursor-pointer ${
-                      session?.id === hist.id 
-                        ? "bg-bg-surface border-border-hi-warm text-accent-warm" 
+                      session?.id === hist.id
+                        ? "bg-bg-surface border-border-hi-warm text-accent-warm"
                         : "bg-bg-primary/40 border-border-warm text-text-secondary hover:bg-bg-surface hover:text-text-primary"
                     }`}
                   >
                     <div className="truncate min-w-0 flex-1">
                       <span className="font-mono text-[9px] text-text-muted block">{hist.timestamp}</span>
-                      <span className="font-medium truncate block">"{hist.topic}"</span>
+                      <span className="font-medium truncate block">"{hist.label || hist.topic}"</span>
                     </div>
                     <ChevronRight className="w-3 h-3 text-text-muted flex-shrink-0" />
                   </button>
                 ))}
               </div>
             )}
+            <button
+              onClick={() => setLibraryOpen(true)}
+              className="w-full mt-2 flex items-center justify-center gap-1.5 text-[10px] font-mono uppercase tracking-wider font-bold text-text-muted hover:text-accent-warm bg-bg-primary/40 hover:bg-bg-surface border border-border-warm rounded-lg py-2 transition-colors cursor-pointer"
+            >
+              <LibraryBig className="w-3 h-3" />
+              Open Library
+              <ChevronRight className="w-3 h-3" />
+            </button>
           </div>
         </aside>
 
@@ -2170,6 +2248,27 @@ export default function App() {
           Intelligence Swarm Architecture © 2026. All Threads Operating Within Nominal Bounds.
         </div>
       </footer>
+
+      {/* Knowledge Library overlay */}
+      {libraryOpen && (
+        <KnowledgeLibrary
+          sessions={history}
+          onClose={() => setLibraryOpen(false)}
+          onOpenSession={(s) => {
+            setSession(s);
+            setTopic(s.topic);
+            setLibraryOpen(false);
+            addLog("SYSTEM", `Restored historic research swarm for: "${s.label || s.topic}"`, "success");
+          }}
+          onToggleFavorite={toggleFavorite}
+          onRename={renameSession}
+          onDelete={deleteSession}
+          onSetTags={setSessionTags}
+          onImport={importSessions}
+          getAgentColorHex={getAgentColorHex}
+          addLog={addLog}
+        />
+      )}
 
       {/* Distraction-free Reader Mode overlay */}
       {showReader && activeText && (
