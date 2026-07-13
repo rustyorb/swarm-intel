@@ -2,21 +2,20 @@
 @import "tailwindcss";
 
 :root {
-  /* Crimson Haze — deep crimson accent over purple-cast blacks, cream text */
-  --color-bg-primary:    #120a10;  /* purple-black */
-  --color-bg-surface:    #1a1018;  /* dark plum surface */
-  --color-border:        #30202c;  /* wine border */
-  --color-border-hi:     #402a3a;  /* raised wine border */
-  --color-text-primary:  #f2e9e4;  /* cream */
-  --color-text-secondary:#b3a0ac;  /* mauve gray */
-  --color-text-muted:    #9c8a96;  /* muted mauve */
-  --color-text-dim:      #b7a8b2;  /* dim mauve */
-  --color-accent:        #dd2d4a;  /* deep crimson */
-  --color-accent-hi:     #f75d75;  /* bright crimson */
-  --color-accent-dim:    rgba(221, 45, 74, 0.12);
-  --color-accent-glow:   rgba(221, 45, 74, 0.06);
-  --color-success:       #7bbf6a;
-  --color-error:         #e2703c;
+  --color-bg-primary:    #14110c;  /* warm near-black */
+  --color-bg-surface:    #1b1813;  /* warm dark surface */
+  --color-border:        #2d2820;  /* warm border */
+  --color-border-hi:     #3a342a;  /* warm highlight border */
+  --color-text-primary:  #f0ebdf;  /* warm cream */
+  --color-text-secondary:#a8a091;  /* secondary warm gray */
+  --color-text-muted:    #9a9282;  /* muted warm gray */
+  --color-text-dim:      #b5b0a2;  /* dim warm gray */
+  --color-accent:        #fb923c;  /* orange-400 */
+  --color-accent-hi:     #fdba74;  /* orange-300 */
+  --color-accent-dim:    rgba(251, 146, 60, 0.12);
+  --color-accent-glow:   rgba(251, 146, 60, 0.06);
+  --color-success:       #5bb797;
+  --color-error:         #d66060;
 }
 
 @theme {

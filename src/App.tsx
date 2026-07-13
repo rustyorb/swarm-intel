@@ -69,16 +69,16 @@ const SAMPLE_TOPICS = [
 
 const getAgentColorHex = (theme: string): string => {
   const mapping: Record<string, string> = {
-    cyan: "#e11d48",
-    emerald: "#84cc16",
+    cyan: "#06b6d4",
+    emerald: "#10b981",
     rose: "#ec4899",
     amber: "#f59e0b",
     purple: "#a855f7",
-    indigo: "#8b5cf6",
-    blue: "#818cf8",
+    indigo: "#6366f1",
+    blue: "#0ea5e9",
     fuchsia: "#d946ef",
   };
-  return mapping[theme] || "#dd2d4a";
+  return mapping[theme] || "#fb923c";
 };
 
 const getAgentModelBadge = (theme: string): string => {
@@ -3109,8 +3109,8 @@ export default function App() {
                             {connectionStatus[key] && (
                               <div className={`p-2.5 rounded-lg border text-[10px] leading-relaxed font-mono ${
                                 connectionStatus[key].success 
-                                  ? "bg-success/5 border-success/20 text-success"
-                                  : "bg-error/5 border-error/20 text-error"
+                                  ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-400"
+                                  : "bg-rose-500/5 border-rose-500/20 text-rose-400"
                               }`}>
                                 {connectionStatus[key].message}
                               </div>
