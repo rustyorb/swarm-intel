@@ -244,6 +244,11 @@ async function generateUnifiedJSON(
 
   let fullPrompt = `${systemInstruction}\n\nUser request:\n${prompt}`;
   fullPrompt += `\n\nCRITICAL: Respond ONLY with a valid, raw JSON representation matching the required schema. Do NOT wrap output in markdown enclosures like \`\`\`json. Your response must parse directly as a raw JSON string.`;
+  // Gemini receives the schema natively; every other provider must see it in
+  // the prompt or each model invents its own JSON shape.
+  if (responseSchema) {
+    fullPrompt += `\n\nThe JSON MUST conform exactly to this schema (property names and nesting are mandatory):\n${JSON.stringify(responseSchema)}`;
+  }
 
   let responseText = "";
 
@@ -607,6 +612,9 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
           const foundArray = Object.values(result).find(val => Array.isArray(val));
           if (foundArray) {
             agentsList = foundArray as any[];
+          } else if (result.agents && typeof result.agents === "object") {
+            // Some models return agents as an object map instead of an array
+            agentsList = Object.values(result.agents);
           }
         }
       }
