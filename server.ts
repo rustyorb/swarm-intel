@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import os from "os";
+import net from "net";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -398,7 +399,9 @@ async function runUniversalStream(
 
 async function startServer() {
   const app = express();
-  const BASE_PORT = Number(process.env.PORT) || 3000;
+  // 3369 stays clear of common dev/Docker ports (3000 = Open WebUI, etc.);
+  // override with PORT in .env if needed.
+  const BASE_PORT = Number(process.env.PORT) || 3369;
 
   // Parse JSON payloads (support larger payload size for multiple research reports)
   app.use(express.json({ limit: "15mb" }));
@@ -1066,6 +1069,31 @@ RESPONSE REQUIREMENTS:
 
   // The base port may already be taken by other local services (Docker
   // containers, Open WebUI, etc.) — walk upward to the first free port.
+  // On Windows, Docker Desktop's port proxy doesn't hold ports exclusively,
+  // so a second bind can "succeed" without EADDRINUSE. Binding alone is not
+  // a reliable test: probe each candidate and skip any port that answers.
+  const isPortServing = (port: number) =>
+    new Promise<boolean>((resolve) => {
+      const probe = net.connect({ port, host: "127.0.0.1" });
+      const done = (taken: boolean) => {
+        probe.destroy();
+        resolve(taken);
+      };
+      probe.once("connect", () => done(true));
+      probe.once("error", () => done(false));
+      probe.setTimeout(400, () => done(false));
+    });
+
+  let freePort = BASE_PORT;
+  while (await isPortServing(freePort)) {
+    console.log(`Port ${freePort} is already in use — trying ${freePort + 1}`);
+    freePort++;
+    if (freePort > BASE_PORT + 20) {
+      console.error(`No free port found in range ${BASE_PORT}-${BASE_PORT + 20}.`);
+      process.exit(1);
+    }
+  }
+
   const listenOn = (port: number, attemptsLeft: number) => {
     const server = app.listen(port, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${port}`);
@@ -1086,7 +1114,7 @@ RESPONSE REQUIREMENTS:
       }
     });
   };
-  listenOn(BASE_PORT, 20);
+  listenOn(freePort, 20);
 }
 
 startServer();
