@@ -24,6 +24,12 @@ You give Swarm Intel a research topic. An **orchestrator** model breaks it into 
 - 🔀 **Multi-provider, per-role routing** — mix and match Gemini, OpenAI, Anthropic, OpenRouter, Venice, LM Studio, and Ollama, and assign a different provider/model to the orchestrator, the agents, and the synthesis step.
 - 🔒 **Keys stay server-side** — the browser never sees a provider key; every call is proxied through the local Express server.
 - 💾 **Everything persists locally** — history, the current session, activity logs, and settings all live in `localStorage`.
+- 🕸️ **Mission Control** — a live animated network view of the running swarm (Grid/Network toggle), with packet flows reversing toward the hub during synthesis.
+- 🎛️ **Mission Parameters** — pick swarm size (3–9) and research depth (Recon/Standard/Deep); recruit custom specialists or dismiss nodes at approval.
+- 🛡️ **Red Team round** — optional adversarial pass where VEX cross-examines every report, and the synthesis must rebut or concede each critique.
+- 💬 **Interrogation Room** — chat with the completed swarm, grounded strictly in its reports, panel-wide or specialist-in-persona.
+- 📦 **Dossier Export Suite** — standalone HTML dossier, print-to-PDF paper theme, and a full-screen Reader Mode with auto-TOC.
+- 🗂️ **Knowledge Library** — a searchable, taggable archive of up to 50 swarms with favorites, rename, and JSON backup/restore.
 
 ---
 
@@ -111,7 +117,29 @@ sequenceDiagram
 
 ## 📸 Screenshots
 
-Screenshots are captured per release and stored under [`assets/screenshots/`](assets/screenshots/). This section is updated with images alongside tagged releases.
+**Mission Control** — the live network view while a swarm runs: orchestrator hub, agent nodes with progress rings, and data packets flowing along the links.
+
+![Mission Control network visualization](assets/screenshots/02-mission-control.png)
+
+**Launch Console** — topic entry with Mission Parameters: swarm size, Recon/Standard/Deep research depth, and the Red Team toggle.
+
+![Launch console](assets/screenshots/01-launch-console.png)
+
+**Consolidated Synthesis** — the final blended report, including the Red Team Findings & Rebuttals section when the adversarial round ran.
+
+![Synthesis report viewer](assets/screenshots/03-synthesis-report.png)
+
+**Red Team** — VEX, the Chief Adversarial Officer, cross-examines every specialist report with a confidence verdict before synthesis.
+
+![Red Team critique tab](assets/screenshots/04-red-team.png)
+
+**Interrogation Room** — follow-up questions answered strictly from the session's intelligence, by the full panel or any specialist in persona.
+
+![Interrogation Room chat](assets/screenshots/05-interrogation-room.png)
+
+**Knowledge Library** — the searchable archive of every swarm: full-text search, filters, tags, favorites, and JSON import/export.
+
+![Knowledge Library](assets/screenshots/06-knowledge-library.png)
 
 ---
 
