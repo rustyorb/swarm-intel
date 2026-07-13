@@ -266,11 +266,17 @@ async function generateUnifiedJSON(
     else if (provider === "lmstudio") targetUrl = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
     else if (provider === "ollama") targetUrl = `${baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
 
-    const result = await callOpenAICompatible(targetUrl, apiKey, {
+    const requestBody: any = {
       model,
       messages: [{ role: "user", content: fullPrompt }],
-      response_format: { type: "json_object" }
-    });
+    };
+    // LM Studio rejects response_format "json_object" (it only accepts
+    // "json_schema"), and Ollama ignores it — the schema travels in the
+    // prompt for those; hosted providers still get the strict-JSON hint.
+    if (provider !== "lmstudio" && provider !== "ollama") {
+      requestBody.response_format = { type: "json_object" };
+    }
+    const result = await callOpenAICompatible(targetUrl, apiKey, requestBody);
     responseText = result.choices?.[0]?.message?.content || "";
   }
 
