@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { MessagesSquare, Cpu, Send, ChevronDown } from "lucide-react";
+import { MessagesSquare, Cpu, Send, ChevronDown, GitBranch, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PixelAvatar from "./PixelAvatar";
@@ -10,6 +10,8 @@ interface InterrogationRoomProps {
   settings: any;
   onPersist: (session: ResearchSession) => void;
   getAgentColorHex: (theme: string) => string;
+  // Commission a follow-up swarm seeded with this session's findings.
+  onLaunchFollowUp?: (directive: string) => void;
 }
 
 const STARTERS = [
@@ -34,12 +36,14 @@ const markdownComponents = {
   td: ({ node, ...props }: any) => <td className="px-3 py-1.5 border-t border-border-warm" {...props} />,
 };
 
-export default function InterrogationRoom({ session, settings, onPersist, getAgentColorHex }: InterrogationRoomProps) {
+export default function InterrogationRoom({ session, settings, onPersist, getAgentColorHex, onLaunchFollowUp }: InterrogationRoomProps) {
   const [respondent, setRespondent] = useState<string>("panel");
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streaming, setStreaming] = useState<{ id: string; content: string } | null>(null);
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
+  const [showFollowUp, setShowFollowUp] = useState(false);
+  const [followUpText, setFollowUpText] = useState("");
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -284,6 +288,47 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
       {/* Composer */}
       <div className="flex-shrink-0 border-t border-border-warm bg-bg-surface px-4 md:px-6 py-4">
         <div className="max-w-3xl mx-auto">
+          {/* Follow-up commissioning panel */}
+          {onLaunchFollowUp && showFollowUp && (
+            <div className="mb-3 bg-bg-primary border border-accent-warm/40 rounded-xl p-3.5">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-widest font-bold text-accent-warm flex items-center gap-1.5">
+                    <GitBranch className="w-3.5 h-3.5" />
+                    Commission Follow-Up Swarm
+                  </div>
+                  <p className="text-[10px] font-mono text-text-muted mt-1 leading-relaxed">
+                    Launches a new investigation that carries this mission's findings and this conversation as established context — the new swarm targets what's still missing instead of re-covering old ground.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowFollowUp(false)}
+                  className="text-text-muted hover:text-text-primary transition-colors cursor-pointer flex-shrink-0"
+                  title="Close"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <textarea
+                value={followUpText}
+                onChange={(e) => setFollowUpText(e.target.value)}
+                rows={2}
+                placeholder="What should the follow-up chase? e.g. the gaps, open questions, or contradictions surfaced in this interrogation…"
+                className="w-full resize-none bg-bg-surface border border-border-warm rounded-lg px-3 py-2.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-warm/50"
+              />
+              <div className="flex justify-end mt-2">
+                <button
+                  onClick={() => { if (followUpText.trim()) { onLaunchFollowUp(followUpText); setShowFollowUp(false); setFollowUpText(""); } }}
+                  disabled={!followUpText.trim()}
+                  className="h-8 px-4 bg-accent-warm hover:bg-accent-hi-warm text-black text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                  Launch Follow-Up
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 mb-2.5">
             <span className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted">Direct question to</span>
             <div className="relative flex items-center">
@@ -301,6 +346,16 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
               </select>
               <ChevronDown className="w-3 h-3 text-text-muted absolute right-2.5 pointer-events-none" />
             </div>
+            {onLaunchFollowUp && !showFollowUp && (
+              <button
+                onClick={() => setShowFollowUp(true)}
+                className="ml-auto h-7 px-3 bg-bg-primary hover:bg-bg-primary/60 border border-accent-warm/40 hover:border-accent-warm text-accent-warm text-[9px] font-mono font-bold rounded-lg uppercase tracking-widest transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Launch a follow-up swarm that carries this mission's findings as context"
+              >
+                <GitBranch className="w-3 h-3" />
+                Commission Follow-Up
+              </button>
+            )}
           </div>
           <div className="flex items-end gap-2">
             <textarea

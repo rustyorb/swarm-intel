@@ -104,6 +104,39 @@ const generateStreamWithRetry = async (params: any, retries = 4, baseDelayMs = 1
 // Universal Multi-Provider Routing & LLM Execution Helpers
 // -------------------------------------------------------------
 
+// Parses the FIRST balanced JSON object/array starting at the first opening
+// char — rescues responses where the model emits valid JSON followed by
+// trailing prose or a second JSON blob.
+function parseFirstBalanced(text: string, openChar: "{" | "[", closeChar: "}" | "]"): any | null {
+  const start = text.indexOf(openChar);
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === openChar) depth++;
+    else if (ch === closeChar) {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch (e) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function extractJSON(text: string): any {
   let cleanText = text.replace(/```json/gi, "").replace(/```/g, "").trim();
   try {
@@ -111,10 +144,10 @@ function extractJSON(text: string): any {
   } catch (e) {
     const firstBrace = cleanText.indexOf("{");
     const firstBracket = cleanText.indexOf("[");
-    
+
     let startIdx = -1;
     let endIdx = -1;
-    
+
     if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
       startIdx = firstBrace;
       endIdx = cleanText.lastIndexOf("}");
@@ -122,16 +155,18 @@ function extractJSON(text: string): any {
       startIdx = firstBracket;
       endIdx = cleanText.lastIndexOf("]");
     }
-    
+
     if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
       const JSONStr = cleanText.substring(startIdx, endIdx + 1);
       try {
         return JSON.parse(JSONStr);
       } catch (innerError: any) {
-        throw new Error(`Candidate JSON located but parsing failed: ${innerError.message}. Content: ${JSONStr}`);
+        const balanced = parseFirstBalanced(cleanText, "{", "}") ?? parseFirstBalanced(cleanText, "[", "]");
+        if (balanced !== null) return balanced;
+        throw new Error(`Candidate JSON located but parsing failed: ${innerError.message}. Content: ${JSONStr.slice(0, 600)}`);
       }
     }
-    throw new Error(`Failed to locate any valid JSON array or block in model response: ${text}`);
+    throw new Error(`Failed to locate any valid JSON array or block in model response: ${text.slice(0, 600)}`);
   }
 }
 
@@ -208,6 +243,100 @@ async function callAnthropic(apiKey: string, body: any): Promise<any> {
     throw new Error(`Anthropic API status ${response.status}: ${errorText || response.statusText}`);
   }
   return await response.json();
+}
+
+// -------------------------------------------------------------
+// Live Web Grounding
+// -------------------------------------------------------------
+// Gemini, Anthropic, OpenRouter, and Venice can run real web search natively,
+// so hasSearch is wired into their request bodies. Every other provider
+// (LM Studio, Ollama, plain OpenAI chat) has no live internet access — for
+// those the server runs SearXNG queries itself and injects the results into
+// the prompt, otherwise the model silently answers from stale training data
+// while claiming to have "searched".
+
+const SEARXNG_BASE_URL = (process.env.SEARXNG_BASE_URL || "http://localhost:8888").replace(/\/$/, "");
+
+const NATIVE_SEARCH_PROVIDERS = new Set(["gemini", "anthropic", "openrouter", "venice"]);
+
+interface SearchHit {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+async function searxngSearch(query: string, maxResults = 8): Promise<SearchHit[]> {
+  const url = `${SEARXNG_BASE_URL}/search?q=${encodeURIComponent(query)}&format=json`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) throw new Error(`SearXNG responded with status ${response.status}`);
+    const data = await response.json() as any;
+    return (data.results || []).slice(0, maxResults).map((r: any) => ({
+      title: r.title || "(untitled)",
+      url: r.url || "",
+      snippet: (r.content || "").slice(0, 500),
+    }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Runs all queries in parallel, dedupes by URL, and formats a grounding block
+// for prompt injection. Returns hitCount 0 when SearXNG is unreachable or dry.
+async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number }> {
+  const seen = new Set<string>();
+  const hits: SearchHit[] = [];
+  const settled = await Promise.allSettled(queries.map((q) => searxngSearch(q)));
+  for (const result of settled) {
+    if (result.status !== "fulfilled") {
+      console.warn(`[Grounding] SearXNG query failed: ${result.reason?.message || result.reason}`);
+      continue;
+    }
+    for (const hit of result.value) {
+      if (!hit.url || seen.has(hit.url)) continue;
+      seen.add(hit.url);
+      hits.push(hit);
+    }
+  }
+  if (hits.length === 0) return { block: "", hitCount: 0 };
+
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = hits.slice(0, 16).map(
+    (h, i) => `[${i + 1}] ${h.title}\n    URL: ${h.url}\n    ${h.snippet}`
+  );
+  const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} via live search — current, real-world data):\n${lines.join("\n")}`;
+  return { block, hitCount: hits.length };
+}
+
+export interface GroundingInfo {
+  mode: "native" | "injected" | "none";
+  detail: string;
+}
+
+// -------------------------------------------------------------
+// Follow-Up Runs
+// -------------------------------------------------------------
+// A follow-up session carries condensed context from its parent run so the
+// orchestrator targets the gaps and agents build on established findings
+// instead of re-deriving them.
+
+function formatPriorContextBlock(priorContext: any): string {
+  if (!priorContext || typeof priorContext !== "object") return "";
+  const synthesis = String(priorContext.synthesis || "").slice(0, 12000);
+  const chatExcerpt = String(priorContext.chatExcerpt || "").slice(0, 4000);
+  const directive = String(priorContext.directive || "").trim();
+  const parentTopic = String(priorContext.parentTopic || "").trim();
+  if (!synthesis && !directive) return "";
+
+  return `PRIOR INVESTIGATION CONTEXT (this is a FOLLOW-UP run — an earlier swarm already researched the topic below):
+ORIGINAL TOPIC: "${parentTopic}"
+
+PRIOR SYNTHESIZED FINDINGS (condensed — treat as established ground):
+${synthesis || "(no synthesis on file)"}
+${chatExcerpt ? `\nINTERROGATION EXCHANGES THAT MOTIVATED THIS FOLLOW-UP:\n${chatExcerpt}\n` : ""}
+FOLLOW-UP DIRECTIVE FROM THE USER: "${directive}"`;
 }
 
 async function generateUnifiedJSON(
@@ -290,11 +419,35 @@ async function runUniversalStream(
   prompt: string,
   systemInstruction: string,
   hasSearch: boolean,
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  searchQueries?: string[],
+  onGrounding?: (info: GroundingInfo) => void
 ): Promise<void> {
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
+  // Providers without native search get live SearXNG results injected into
+  // the prompt; if that fails the model is told to caveat staleness instead
+  // of silently roleplaying a web search it never ran.
+  if (hasSearch && !NATIVE_SEARCH_PROVIDERS.has(provider)) {
+    try {
+      const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
+      const { block, hitCount } = await gatherLiveContext(queries);
+      if (hitCount > 0) {
+        prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory): You have NO live internet access of your own — the LIVE WEB SEARCH RESULTS above are your only source of current information. Ground every time-sensitive claim in them and cite the numbered sources inline with their URLs. Where the live results do not cover a point, state that explicitly instead of presenting memorized training data as current.`;
+        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected (${provider} has no native web search)` });
+      } else {
+        prompt = `${prompt}\n\nWARNING: No live web data could be retrieved for this run. You must explicitly flag that your findings come from model training data and may be outdated, and date-stamp any claim that could have changed.`;
+        onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL} returned no results) — falling back to model knowledge` });
+      }
+    } catch (err: any) {
+      console.warn(`[Grounding] Live context gathering failed: ${err.message}`);
+      prompt = `${prompt}\n\nWARNING: No live web data could be retrieved for this run. You must explicitly flag that your findings come from model training data and may be outdated, and date-stamp any claim that could have changed.`;
+      onGrounding?.({ mode: "none", detail: `Live search failed (${err.message}) — falling back to model knowledge` });
+    }
+  }
+
   if (provider === "gemini") {
+    if (hasSearch) onGrounding?.({ mode: "native", detail: "Gemini Google Search grounding active" });
     const client = new GoogleGenAI({ apiKey });
     const responseStream = await client.models.generateContentStream({
       model: model,
@@ -320,6 +473,7 @@ async function runUniversalStream(
   }
 
   if (provider === "anthropic") {
+    if (hasSearch) onGrounding?.({ mode: "native", detail: "Anthropic web_search server tool active" });
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -330,7 +484,8 @@ async function runUniversalStream(
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: `${systemInstruction}\n\n${prompt}` }],
-        max_tokens: 4000,
+        max_tokens: hasSearch ? 8000 : 4000,
+        ...(hasSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }] } : {}),
         stream: true
       })
     });
@@ -378,6 +533,17 @@ async function runUniversalStream(
   else if (provider === "lmstudio") targetUrl = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
   else if (provider === "ollama") targetUrl = `${baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
 
+  // OpenRouter and Venice run web search server-side when asked; the results
+  // are woven into the completion by the provider itself.
+  let searchExtras: Record<string, any> = {};
+  if (hasSearch && provider === "openrouter") {
+    searchExtras = { plugins: [{ id: "web" }] };
+    onGrounding?.({ mode: "native", detail: "OpenRouter web plugin active" });
+  } else if (hasSearch && provider === "venice") {
+    searchExtras = { venice_parameters: { enable_web_search: "on", enable_web_citations: true } };
+    onGrounding?.({ mode: "native", detail: "Venice web search active" });
+  }
+
   const response = await fetch(targetUrl, {
     method: "POST",
     headers: {
@@ -390,6 +556,7 @@ async function runUniversalStream(
         { role: "system", content: systemInstruction },
         { role: "user", content: prompt }
       ],
+      ...searchExtras,
       stream: true
     })
   });
@@ -470,16 +637,18 @@ async function startServer() {
       if (provider === "gemini") {
         try {
           const client = new GoogleGenAI({ apiKey: provKey || process.env.GEMINI_API_KEY || "" });
-          const response = await client.models.list() as any;
-          for (const m of response) {
+          // models.list() returns a Pager, which is only ASYNC-iterable — a
+          // plain for..of throws and used to silently trigger the fallback.
+          const pager = await client.models.list({ config: { pageSize: 100 } });
+          for await (const m of pager as any) {
             if (m.name) {
               models.push(m.name.replace("models/", ""));
             }
           }
           models = models.filter((name: string) => name.includes("gemini") || name.includes("learnlm"));
-        } catch (err) {
-          // Fallback to standard active Gemini models
-          models = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite"];
+        } catch (err: any) {
+          console.warn(`[Models] Gemini model listing failed (${err?.message || err}) — serving fallback list.`);
+          models = ["gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
         }
       } else if (provider === "openai") {
         const url = "https://api.openai.com/v1/models";
@@ -500,17 +669,14 @@ async function startServer() {
         const data = await response.json() as any;
         models = data.data.map((m: any) => m.id);
       } else if (provider === "anthropic") {
-        // Return standard well-known Anthropic models alphabetically
-        models = [
-          "claude-3-5-sonnet-latest",
-          "claude-3-5-sonnet-20241022",
-          "claude-3-5-haiku-latest",
-          "claude-3-5-haiku-20241022",
-          "claude-3-opus-latest",
-          "claude-3-opus-20240229",
-          "claude-3-sonnet-20240229",
-          "claude-3-haiku-20240307"
-        ];
+        const response = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+          headers: { "x-api-key": provKey, "anthropic-version": "2023-06-01" }
+        });
+        if (!response.ok) {
+          throw new Error(`Anthropic API responded with status ${response.status}`);
+        }
+        const data = await response.json() as any;
+        models = data.data.map((m: any) => m.id);
       } else if (provider === "venice") {
         const url = "https://api.venice.ai/api/v1/models";
         const response = await fetch(url, {
@@ -557,35 +723,60 @@ async function startServer() {
   // 1. Swarm Assembly Endpoint - Breaks a topic down into 5-7 parallel agents
   app.post("/api/research/initiate", async (req, res) => {
     try {
-      const { topic, settings, config } = req.body;
+      const { topic, settings, config, priorContext } = req.body;
       if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
         return res.status(400).json({ error: "A valid research topic is required." });
       }
+      const priorBlock = formatPriorContextBlock(priorContext);
 
-      const rawCount = config && typeof config.agentCount === "number" ? config.agentCount : 6;
-      const agentCount = Math.max(3, Math.min(9, Math.round(rawCount)));
+      // "auto" (or anything non-numeric) lets the orchestrator size the swarm
+      // from its analysis of the research need; a number pins the count.
+      const rawCount = config ? config.agentCount : "auto";
+      const pinnedCount = typeof rawCount === "number" ? Math.max(3, Math.min(9, Math.round(rawCount))) : null;
       const depth = config && config.depth ? config.depth : "standard";
 
       let depthHint = "";
       if (depth === "recon") {
-        depthHint = "\nDEPTH MODE — RECON: Keep each agent's angle tightly scoped and narrowly focused for rapid tactical coverage. Avoid sprawling, open-ended mandates.";
+        depthHint = "\nDEPTH MODE — RECON: Keep each agent's assignment tightly scoped and narrowly focused for rapid tactical coverage. Avoid sprawling, open-ended mandates.";
       } else if (depth === "deep") {
-        depthHint = "\nDEPTH MODE — DEEP: Make each agent's angle maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
+        depthHint = "\nDEPTH MODE — DEEP: Make each agent's assignment maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
       }
 
-      console.log(`Assembling research swarm for topic: "${topic}" (${agentCount} agents, ${depth} depth)`);
+      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
 
-      const prompt = `Analyze the user's research topic: "${topic}".
-Break this topic down into exactly ${agentCount} distinct, parallel specialist research perspectives.
-For each perspective, design an elite research agent with a unique creative name (e.g. Dr. Aris Vance, Agent Cipher, Investigator Kaelen), a highly specialized role/title (e.g. Cryptographic Analyst, Geopolitical Strategist), a detailed investigative instruction/angle, and a visual theme color.
-Ensure the angles cover the full breadth of the topic from different aspects (e.g. technical engineering, socioeconomic impact, historical context, ethical concerns, futuristic outlook, structural analysis, etc.).${depthHint}`;
+      const today = new Date().toDateString();
+      const followUpFraming = priorBlock
+        ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Diagnose the follow-up need itself — the gaps, open questions, and weak spots the directive targets. Sprout agents aimed squarely at what is missing or unresolved; do NOT field agents to re-cover ground the prior run already settled (unless the directive is to verify or challenge it).`
+        : "";
+      const prompt = `Today's date is ${today}.
 
-      const systemInstruction = "You are an elite Research Swarm Orchestrator. Your task is to break down research requests into cohesive, complementary parallel investigative tracks run by specialized, interesting digital persona agents.";
+RESEARCH REQUEST: "${topic}"${followUpFraming}
+
+Work in two phases.
+
+PHASE 1 — ANALYZE THE RESEARCH NEED (this drives everything else):
+Before thinking about any team, diagnose what this request actually requires:
+- What kind of question is it (technical evaluation, market scan, product comparison, historical inquiry, scientific review, investigation of a person/organization/event, local or situational lookup, how-to, etc.)?
+- What must a genuinely useful answer contain, and what evidence would settle it?
+- Which domains of expertise are truly required — and, just as important, which classic research angles are IRRELEVANT to this particular need?
+Write this diagnosis up as a concise mission analysis of 60-140 words (the "needAnalysis" field).
+
+PHASE 2 — SPROUT THE TEAM FROM THE ANALYSIS:
+Design ${pinnedCount ? `exactly ${pinnedCount}` : "between 3 and 9 (your call — exactly as many as the need demands, no padding)"} specialist research agents, each derived directly from a requirement identified in Phase 1.
+- Every agent must map to a concrete requirement of THIS request. Do NOT apply a stock template of perspectives (technical / socioeconomic / historical / ethical / futuristic) unless your analysis shows that angle is genuinely needed here.
+- If the need is narrow, prefer a small team of tightly targeted agents over generic filler roles.
+- Give each agent a unique creative persona name, a specialty title a real expert in this exact problem space would hold, a specific investigative assignment stating what they must find out and which kinds of sources or evidence to chase, and a theme color.${depthHint}`;
+
+      const systemInstruction = "You are an elite Research Swarm Orchestrator. You first diagnose what a research request truly needs, then assemble a bespoke team of specialist digital persona agents shaped entirely by that diagnosis — never by a fixed template of roles.";
 
       const responseSchema = {
         type: Type.OBJECT,
-        description: "An object containing the list of assembled specialized research agents.",
+        description: "An object containing the mission analysis and the list of specialized research agents derived from it.",
         properties: {
+          needAnalysis: {
+            type: Type.STRING,
+            description: "Concise diagnosis (60-140 words) of what this research need actually requires and which expertise it demands."
+          },
           agents: {
             type: Type.ARRAY,
             description: "List of specialized research agents assembled for the topic.",
@@ -593,53 +784,139 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
               type: Type.OBJECT,
               properties: {
                 id: { type: Type.STRING, description: "A unique short alphanumeric ID for the agent, e.g. agent-1" },
-                name: { type: Type.STRING, description: "A unique, creative name for the specialist agent (e.g., Dr. Aris Vance, Agent Cipher)" },
-                role: { type: Type.STRING, description: "A detailed role or specialty title (e.g., Cryptographic Analyst, Geopolitical Strategist)" },
-                investigativeAngle: { type: Type.STRING, description: "A specific investigative query/angle this agent will focus on, detailing what they must explore" },
+                name: { type: Type.STRING, description: "A unique, creative persona name for the specialist agent" },
+                role: { type: Type.STRING, description: "A specialty title a real expert in this exact problem space would hold" },
+                investigativeAngle: { type: Type.STRING, description: "A specific investigative assignment stating what this agent must find out and which sources/evidence to chase" },
                 colorTheme: { type: Type.STRING, description: "A color name matching their role (choose one of: cyan, emerald, rose, amber, purple, indigo, blue, fuchsia)" },
               },
               required: ["id", "name", "role", "investigativeAngle", "colorTheme"],
             },
           }
         },
-        required: ["agents"]
+        required: ["needAnalysis", "agents"]
       };
 
-      const result = await generateUnifiedJSON("orchestrator", settings, prompt, systemInstruction, responseSchema);
-      
-      let agentsList: any[] = [];
-      if (result) {
-        if (Array.isArray(result)) {
-          agentsList = result;
-        } else if (Array.isArray(result.agents)) {
-          agentsList = result.agents;
-        } else if (typeof result === "object") {
-          // Robust fallback: find any array property in the returned object
-          const foundArray = Object.values(result).find(val => Array.isArray(val));
-          if (foundArray) {
-            agentsList = foundArray as any[];
-          } else if (result.agents && typeof result.agents === "object") {
-            // Some models return agents as an object map instead of an array
-            agentsList = Object.values(result.agents);
+      // Some models wrap each agent one level deep ({"agent-1": {...}}) —
+      // unwrap before validating.
+      const normalizeAgentItem = (a: any): any => {
+        if (!a || typeof a !== "object") return a;
+        if (!a.name && !a.role && !a.investigativeAngle) {
+          const vals = Object.values(a);
+          if (vals.length === 1 && vals[0] && typeof vals[0] === "object") return vals[0];
+        }
+        return a;
+      };
+      const isUsableAgent = (a: any): boolean =>
+        !!a && typeof a === "object" &&
+        typeof a.investigativeAngle === "string" && a.investigativeAngle.trim().length > 0 &&
+        ((typeof a.name === "string" && a.name.trim().length > 0) || (typeof a.role === "string" && a.role.trim().length > 0));
+
+      // Some models echo the schema back with the real data nested inside
+      // (e.g. {properties: {agents: {items: [...]}}}) — breadth-first scan for
+      // the first array that actually contains usable agents.
+      const findAgentArrayDeep = (root: any): any[] => {
+        const queue: any[] = [root];
+        let guard = 0;
+        while (queue.length > 0 && guard++ < 300) {
+          const node = queue.shift();
+          if (!node || typeof node !== "object") continue;
+          if (Array.isArray(node)) {
+            const normalized = node.map(normalizeAgentItem).filter(isUsableAgent);
+            if (normalized.length >= 2) return normalized;
+            for (const v of node) queue.push(v);
+          } else {
+            for (const v of Object.values(node)) queue.push(v);
           }
         }
+        return [];
+      };
+
+      const findNeedAnalysisDeep = (root: any): string => {
+        const queue: any[] = [root];
+        let guard = 0;
+        while (queue.length > 0 && guard++ < 300) {
+          const node = queue.shift();
+          if (!node || typeof node !== "object" || Array.isArray(node)) {
+            if (Array.isArray(node)) for (const v of node) queue.push(v);
+            continue;
+          }
+          const val = node.needAnalysis;
+          if (typeof val === "string" && val.trim()) return val.trim();
+          if (val && typeof val === "object" && typeof val.value === "string" && val.value.trim()) return val.value.trim();
+          for (const v of Object.values(node)) if (v && typeof v === "object") queue.push(v);
+        }
+        return "";
+      };
+
+      // Silently shipping placeholder "Specialist N" agents when a model goes
+      // off-schema defeats the whole need-driven design — validate and retry
+      // once with a corrective instruction instead.
+      let agentsList: any[] = [];
+      let needAnalysis = "";
+      let lastError: any = null;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        const attemptPrompt = attempt === 1
+          ? prompt
+          : `${prompt}\n\nIMPORTANT: Your previous response did not match the required JSON schema. Return ONLY a single raw JSON object — no schema echo, no markdown, nothing after the closing brace — with a "needAnalysis" string and an "agents" array of FLAT objects, each having exactly these string keys: id, name, role, investigativeAngle, colorTheme.`;
+
+        let result: any = null;
+        try {
+          result = await generateUnifiedJSON("orchestrator", settings, attemptPrompt, systemInstruction, responseSchema);
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Initiate] Attempt ${attempt}: orchestrator response unparseable — ${err.message}`);
+          continue;
+        }
+
+        let list: any[] = [];
+        if (result) {
+          if (Array.isArray(result)) {
+            list = result;
+          } else if (Array.isArray(result.agents)) {
+            list = result.agents;
+          } else if (typeof result === "object") {
+            // Robust fallback: find any array property in the returned object
+            const foundArray = Object.values(result).find(val => Array.isArray(val));
+            if (foundArray) {
+              list = foundArray as any[];
+            } else if (result.agents && typeof result.agents === "object") {
+              // Some models return agents as an object map instead of an array
+              list = Object.values(result.agents);
+            }
+          }
+        }
+
+        list = list.map(normalizeAgentItem).filter(isUsableAgent);
+        // Schema-echo and other nesting mishaps: hunt for the agents wherever
+        // the model buried them before burning a retry.
+        if (list.length < 2 && result && typeof result === "object") {
+          list = findAgentArrayDeep(result);
+        }
+
+        if (list.length >= 2) {
+          agentsList = list;
+          needAnalysis = result && typeof result.needAnalysis === "string"
+            ? result.needAnalysis.trim()
+            : findNeedAnalysisDeep(result);
+          break;
+        }
+        console.warn(`[Initiate] Attempt ${attempt}: orchestrator output unusable (${list.length} valid agents). Raw: ${JSON.stringify(result).slice(0, 800)}`);
+      }
+
+      if (agentsList.length === 0) {
+        throw new Error(`Orchestrator failed to produce a valid agent roster after a retry — the model returned output that does not match the required structure${lastError ? ` (${lastError.message?.slice(0, 200)})` : ""}. Try a different orchestrator model or provider.`);
       }
 
       // Safeguard IDs and structure
-      const cleanAgents = agentsList.map((a: any, idx: number) => ({
+      const cleanAgents = agentsList.slice(0, 9).map((a: any, idx: number) => ({
         id: a.id || `agent-${idx + 1}`,
         name: a.name || `Specialist ${idx + 1}`,
         role: a.role || "Swarm Investigator",
-        investigativeAngle: a.investigativeAngle || `Analyze dimension ${idx + 1}`,
+        investigativeAngle: a.investigativeAngle,
         colorTheme: a.colorTheme || "cyan"
       }));
 
-      if (cleanAgents.length === 0) {
-        console.error("Orchestrator returned no agent array. Raw result:", JSON.stringify(result).slice(0, 600));
-        throw new Error("Orchestrator returned no agents — the model produced JSON without an agent list. Try a different orchestrator model or provider.");
-      }
-
-      res.json({ agents: cleanAgents });
+      res.json({ agents: cleanAgents, needAnalysis });
     } catch (error: any) {
       console.error("Error in /api/research/initiate:", error);
       res.status(500).json({ error: error.message || "Failed to assemble research agents." });
@@ -649,7 +926,7 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
   // 1.5. Regenerate Single Agent Endpoint with Nudge
   app.post("/api/research/regenerate-agent", async (req, res) => {
     try {
-      const { topic, agents, agentIdToRegenerate, nudge, settings } = req.body;
+      const { topic, agents, agentIdToRegenerate, nudge, settings, needAnalysis } = req.body;
       if (!topic || !agents || !agentIdToRegenerate) {
         return res.status(400).json({ error: "Topic, agents list, and agentIdToRegenerate are required." });
       }
@@ -662,7 +939,7 @@ Ensure the angles cover the full breadth of the topic from different aspects (e.
         .join("\n");
 
       const prompt = `Topic: "${topic}"
-Existing research team:
+${needAnalysis ? `Mission analysis of the research need (the replacement must serve a real requirement identified here, not a generic template role):\n${needAnalysis}\n` : ""}Existing research team:
 ${otherAgentsContext || "None"}
 
 The user wants to replace/regenerate the specialist agent node that has ID: "${agentIdToRegenerate}".
@@ -701,12 +978,13 @@ Ensure the new agent is distinct and does not replicate the other existing agent
   // 2. Agent Research Run Endpoint - Executes a single agent investigation via SSE
   app.post("/api/research/agent-run-stream", async (req, res) => {
     try {
-      const { topic, agent, settings, config } = req.body;
+      const { topic, agent, settings, config, priorContext } = req.body;
       if (!topic || !agent) {
         return res.status(400).json({ error: "Topic and agent configuration are required." });
       }
 
       const depth = config && config.depth ? config.depth : "standard";
+      const priorBlock = formatPriorContextBlock(priorContext);
 
       console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}]`);
 
@@ -715,6 +993,12 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       res.setHeader("Connection", "keep-alive");
       res.flushHeaders();
       res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+
+      // Anti-stale-data guardrails: every agent knows today's date, must
+      // prefer live web findings over memory, and must cite sources.
+      const today = new Date().toDateString();
+      const datePreamble = `Today's date is ${today}. Your training data predates this — treat live web information as authoritative over memorized knowledge, and date-stamp any claim that could have changed since your training.`;
+      const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge.`;
 
       let prompt: string;
       if (depth === "recon") {
@@ -765,6 +1049,20 @@ Structure your response beautifully with Markdown:
 Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
       }
 
+      if (priorBlock) {
+        prompt = `${prompt}\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are established context — do NOT re-derive or restate them at length. Your job is to EXTEND: chase your specific assignment, verify or challenge prior claims where your assignment demands it, and flag clearly anything you find that contradicts the prior report.`;
+      }
+      prompt = `${datePreamble}\n\n${prompt}\n\n${citationRules}`;
+
+      // Queries for the injected-grounding fallback (providers without native
+      // web search); native-search providers run their own queries instead.
+      const currentYear = new Date().getFullYear();
+      const searchQueries = [
+        String(topic).slice(0, 220),
+        String(agent.investigativeAngle || "").slice(0, 220),
+        `${String(topic).slice(0, 160)} latest ${currentYear}`,
+      ].filter((q) => q.trim().length > 0);
+
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
       }, 5000);
@@ -778,6 +1076,11 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
           true,
           (text: string) => {
             res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
+          },
+          searchQueries,
+          (info) => {
+            console.log(`[Grounding] ${agent.name}: ${info.mode} — ${info.detail}`);
+            res.write(`data: ${JSON.stringify({ type: "grounding", mode: info.mode, detail: info.detail })}\n\n`);
           }
         );
 
@@ -798,10 +1101,11 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, reports, settings, config, critiques } = req.body;
+      const { topic, reports, settings, config, critiques, priorContext } = req.body;
       if (!topic || !reports || !Array.isArray(reports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
+      const priorBlock = formatPriorContextBlock(priorContext);
 
       const depth = config && config.depth ? config.depth : "standard";
 
@@ -847,12 +1151,22 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
         }
       }
 
+      const followUpContextBlock = priorBlock
+        ? `\n\n${priorBlock}\n\nThis synthesis concludes a FOLLOW-UP investigation commissioned against the prior findings above.`
+        : "";
+      const followUpSectionDirective = priorBlock
+        ? `\n\n## 4.7 Follow-Up Integration
+- This was a follow-up run. State explicitly what the new investigation ADDS to, CONFIRMS in, or OVERTURNS from the prior report.
+- Address the user's follow-up directive point by point: what is now answered, and what remains open.
+- Where new findings contradict the prior report, say so plainly and state which conclusion should now be trusted and why.`
+        : "";
+
       const prompt = `OVERARCHING TOPIC: "${topic}"
 
 You are the Lead Swarm Orchestrator. Your mission is to synthesize the following expert investigative reports into a single, comprehensive, publication-grade analytical document.
 
 SPECIALIST REPORTS:
-${reportsContext}${critiquesBlock}
+${reportsContext}${critiquesBlock}${followUpContextBlock}
 
 REQUIRED OUTPUT STRUCTURE:
 # ${topic}: Swarm Intelligence Synthesis
@@ -863,7 +1177,7 @@ REQUIRED OUTPUT STRUCTURE:
 
 ## 2. Investigative Tracks & Methodology
 - Overview of the parallel expertise utilized in this swarm.
-- How the different specialist angles (technical, social, ethical, etc.) interconnected.
+- How the different specialist angles fielded for this particular mission interconnected.
 
 ## 3. Synthesized Expert Insights
 - Deep-dive analysis categorized by theme.
@@ -873,7 +1187,7 @@ REQUIRED OUTPUT STRUCTURE:
 ## 4. Conflict, Consensus & Uncertainty
 - Where did specialists agree?
 - Where were there disagreements or trade-offs?
-- Identify gaps or areas requiring further future investigation.${critiqueDirective}
+- Identify gaps or areas requiring further future investigation.${critiqueDirective}${followUpSectionDirective}
 
 ## 5. Strategic Trajectory & Recommendations
 - Forward-looking implications.

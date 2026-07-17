@@ -55,7 +55,7 @@ import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, PriorContext, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 
@@ -169,8 +169,14 @@ function MissionParameters({
   onChange: (config: SwarmConfig) => void;
   compact?: boolean;
 }) {
-  const setCount = (next: number) => {
-    onChange({ ...config, agentCount: Math.max(3, Math.min(9, next)) });
+  // Count runs AUTO ← 3 … 9: stepping below 3 hands sizing to the
+  // orchestrator, which sprouts as many agents as the research need demands.
+  const decCount = () => {
+    if (config.agentCount === "auto") return;
+    onChange({ ...config, agentCount: config.agentCount <= 3 ? "auto" : config.agentCount - 1 });
+  };
+  const incCount = () => {
+    onChange({ ...config, agentCount: config.agentCount === "auto" ? 3 : Math.min(9, config.agentCount + 1) });
   };
   const activeDepth = DEPTH_OPTIONS.find((d) => d.id === config.depth) || DEPTH_OPTIONS[1];
 
@@ -190,22 +196,27 @@ function MissionParameters({
           </div>
           <div className="flex items-center justify-between bg-bg-surface border border-border-warm rounded-lg px-2 py-1.5">
             <button
-              onClick={() => setCount(config.agentCount - 1)}
-              disabled={config.agentCount <= 3}
+              onClick={decCount}
+              disabled={config.agentCount === "auto"}
               className="w-6 h-6 rounded-md flex items-center justify-center text-text-secondary hover:text-accent-warm hover:bg-bg-primary transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Decrease swarm size"
+              title="Decrease swarm size (below 3 switches to AUTO)"
             >
               <Minus className="w-3.5 h-3.5" />
             </button>
-            <div className="flex items-baseline gap-1.5">
+            <div
+              className="flex items-baseline gap-1.5"
+              title={config.agentCount === "auto" ? "The orchestrator sizes the swarm from its analysis of the research need" : undefined}
+            >
               <span className="text-lg font-mono font-bold text-accent-warm tabular-nums leading-none">
-                {config.agentCount}
+                {config.agentCount === "auto" ? "AUTO" : config.agentCount}
               </span>
-              <span className="text-[8px] font-mono uppercase tracking-widest text-text-muted">nodes</span>
+              <span className="text-[8px] font-mono uppercase tracking-widest text-text-muted">
+                {config.agentCount === "auto" ? "need-driven" : "nodes"}
+              </span>
             </div>
             <button
-              onClick={() => setCount(config.agentCount + 1)}
-              disabled={config.agentCount >= 9}
+              onClick={incCount}
+              disabled={config.agentCount !== "auto" && config.agentCount >= 9}
               className="w-6 h-6 rounded-md flex items-center justify-center text-text-secondary hover:text-accent-warm hover:bg-bg-primary transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
               title="Increase swarm size"
             >
@@ -475,14 +486,14 @@ export default function App() {
       if (stored) {
         const parsed = JSON.parse(stored);
         return {
-          agentCount: typeof parsed.agentCount === "number" ? Math.max(3, Math.min(9, parsed.agentCount)) : 6,
+          agentCount: typeof parsed.agentCount === "number" ? Math.max(3, Math.min(9, parsed.agentCount)) : "auto",
           depth: ["recon", "standard", "deep"].includes(parsed.depth) ? parsed.depth : "standard",
         };
       }
     } catch (e) {
       // Ignore malformed config
     }
-    return { agentCount: 6, depth: "standard" };
+    return { agentCount: "auto", depth: "standard" };
   });
 
   useEffect(() => {
@@ -615,6 +626,7 @@ export default function App() {
           agents: session.agents,
           agentIdToRegenerate: agentId,
           nudge: nudge,
+          needAnalysis: session.needAnalysis || "",
           settings: settings
         }),
       });
@@ -795,8 +807,9 @@ export default function App() {
     setLogs(prev => [...prev, { time: timeStr, sender, message, type, agentColor: colorTheme }]);
   };
 
-  // 1. Initialize Swarm
-  const handleInitiateResearch = async (searchTopic: string) => {
+  // 1. Initialize Swarm. An optional priorContext turns this into a
+  // follow-up run seeded with a parent session's findings.
+  const handleInitiateResearch = async (searchTopic: string, priorContext?: PriorContext) => {
     if (!searchTopic.trim()) return;
 
     setTopic(searchTopic);
@@ -811,17 +824,21 @@ export default function App() {
       agents: [],
       status: "assembling",
       config: swarmConfig,
+      ...(priorContext ? { priorContext } : {}),
     };
 
     setSession(newSession);
     addLog("SYSTEM", `Initializing orchestration sequence for: "${searchTopic}"`, "system");
+    if (priorContext) {
+      addLog("ORCHESTRATOR", `FOLLOW-UP commission — carrying forward findings from prior mission: "${priorContext.parentTopic}"`, "system");
+    }
     addLog("ORCHESTRATOR", "Structuring research requirements into high-fidelity specialist dimensions...", "info");
 
     try {
       const response = await fetch("/api/research/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: searchTopic, settings: settings, config: swarmConfig }),
+        body: JSON.stringify({ topic: searchTopic, settings: settings, config: swarmConfig, priorContext }),
       });
 
       if (!response.ok) {
@@ -843,7 +860,11 @@ export default function App() {
         throw new Error("The orchestrator returned zero agents. Check the orchestrator model in Settings — some models fail to produce the required JSON structure.");
       }
 
-      addLog("ORCHESTRATOR", `Successfully designated ${loadedAgents.length} elite specialists for this topic.`, "success");
+      const needAnalysis: string = typeof data.needAnalysis === "string" ? data.needAnalysis : "";
+      if (needAnalysis) {
+        addLog("ORCHESTRATOR", `Mission analysis: ${needAnalysis}`, "info");
+      }
+      addLog("ORCHESTRATOR", `Sprouted ${loadedAgents.length} specialists tailored to this research need.`, "success");
 
       // Initialize progress states for each assembled agent
       const initialProgress: Record<string, { percent: number; statusText: string }> = {};
@@ -853,7 +874,7 @@ export default function App() {
       setAgentProgress(initialProgress);
 
       // Animate agent assembly one by one
-      setSession(prev => prev ? { ...prev, agents: loadedAgents } : null);
+      setSession(prev => prev ? { ...prev, agents: loadedAgents, needAnalysis } : null);
       
       for (let i = 0; i <= loadedAgents.length; i++) {
         setAssemblyStep(i);
@@ -880,6 +901,24 @@ export default function App() {
       addLog("SYSTEM", `Assembly Error: ${err.message}`, "warning");
       setSession(prev => prev ? { ...prev, status: "failed", error: err.message } : null);
     }
+  };
+
+  // Commission a follow-up swarm from a completed session: condense its
+  // findings + recent interrogation into a PriorContext and launch a new run.
+  const handleLaunchFollowUp = (directive: string) => {
+    if (!session || !directive.trim()) return;
+    const chatExcerpt = (session.chat ?? [])
+      .slice(-8)
+      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 500)}`)
+      .join("\n");
+    const prior: PriorContext = {
+      parentSessionId: session.id,
+      parentTopic: session.topic,
+      directive: directive.trim(),
+      synthesis: (session.synthesizedReport || "").slice(0, 9000),
+      chatExcerpt,
+    };
+    handleInitiateResearch(directive.trim(), prior);
   };
 
   // Simulate progress counters for parallel agents and coordinate API runs
@@ -959,7 +998,7 @@ export default function App() {
         const response = await fetch("/api/research/agent-run-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings, config: currentSession.config }),
+          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings, config: currentSession.config, priorContext: currentSession.priorContext }),
         });
 
         if (!response.ok) {
@@ -1015,6 +1054,14 @@ export default function App() {
                       agents: prev.agents.map(a => a.id === agent.id ? { ...a, report } : a)
                     };
                   });
+                } else if (data?.type === "grounding") {
+                  // Surface whether this run is actually internet-grounded
+                  addLog(
+                    agent.name,
+                    `Web grounding: ${data.detail}`,
+                    data.mode === "none" ? "warning" : "info",
+                    agent.colorTheme
+                  );
                 } else if (data?.type === "error") {
                   throw new Error(data.error || "Stream error.");
                 }
@@ -1214,7 +1261,8 @@ export default function App() {
           critique: c.critique
         })),
         settings: settings,
-        config: currentSession.config
+        config: currentSession.config,
+        priorContext: currentSession.priorContext
       };
 
       const response = await fetch("/api/research/synthesize-stream", {
@@ -1771,13 +1819,21 @@ export default function App() {
                     <h2 className="text-base font-bold text-text-primary italic mt-1 leading-relaxed">
                       "{session.topic}"
                     </h2>
-                    <div className="flex items-center gap-2 mt-2">
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
                       <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-bg-primary border border-border-warm text-text-muted">
-                        NODES: <span className="text-accent-warm">{session.config?.agentCount ?? session.agents.length}</span>
+                        NODES: <span className="text-accent-warm">{typeof session.config?.agentCount === "number" ? session.config.agentCount : session.agents.length}</span>
                       </span>
                       <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-bg-primary border border-border-warm text-text-muted">
                         DEPTH: <span className="text-accent-warm">{(session.config?.depth ?? "standard").toUpperCase()}</span>
                       </span>
+                      {session.priorContext && (
+                        <span
+                          className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-accent-warm/10 border border-accent-warm/40 text-accent-warm"
+                          title={`Follow-up of: "${session.priorContext.parentTopic}"`}
+                        >
+                          FOLLOW-UP
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 bg-bg-primary px-3.5 py-1.5 rounded-xl border border-border-warm font-mono text-[11px]">
@@ -1801,12 +1857,23 @@ export default function App() {
                 <div className="flex items-center gap-2 text-xs text-text-secondary">
                   <Activity className="w-3.5 h-3.5 text-accent-warm animate-pulse" />
                   <span>
-                    {session.status === "approval" 
+                    {session.status === "approval"
                       ? "The specialist team configuration is finalized and awaiting your tactical validation."
                       : `The Lead Orchestrator has spun up ${session.agents.length} thread instances running concurrently.`
                     }
                   </span>
                 </div>
+
+                {session.needAnalysis && (
+                  <div className="mt-3.5 bg-bg-primary border border-border-warm rounded-lg px-3.5 py-2.5">
+                    <div className="text-[9px] font-mono uppercase tracking-widest font-bold text-accent-warm mb-1">
+                      Mission Analysis — why this team
+                    </div>
+                    <p className="text-[11px] text-text-secondary leading-relaxed">
+                      {session.needAnalysis}
+                    </p>
+                  </div>
+                )}
 
                 {session.status === "approval" && (
                   <div className="mt-5 pt-5 border-t border-border-warm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -1828,7 +1895,7 @@ export default function App() {
                         Recruit Specialist
                       </button>
                       <button
-                        onClick={() => handleInitiateResearch(session.topic)}
+                        onClick={() => handleInitiateResearch(session.topic, session.priorContext)}
                         className="flex-1 md:flex-initial h-9 px-4 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                         title="Reroll and regenerate all agents from scratch"
                       >
@@ -2234,7 +2301,7 @@ export default function App() {
 
               <div className="flex flex-col sm:flex-row gap-4 justify-center w-full max-w-xs">
                 <button
-                  onClick={() => handleInitiateResearch(session.topic)}
+                  onClick={() => handleInitiateResearch(session.topic, session.priorContext)}
                   className="w-full sm:w-auto px-6 py-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-xs font-bold rounded-xl uppercase tracking-wider font-display shadow-lg shadow-accent-warm/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -2405,6 +2472,7 @@ export default function App() {
                   settings={settings}
                   onPersist={(updated) => { setSession(updated); saveToHistory(updated); }}
                   getAgentColorHex={getAgentColorHex}
+                  onLaunchFollowUp={handleLaunchFollowUp}
                 />
               ) : activeReportViewerId === "redteam" ? (
                 <div className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">

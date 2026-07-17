@@ -15,7 +15,7 @@
 
 ## What is this?
 
-You give Swarm Intel a research topic. An **orchestrator** model breaks it into 5 to 7 distinct investigative angles and designs a named specialist agent for each (e.g. *Dr. Aris Vance, Cryptographic Analyst*). You review and refine that team, then each agent runs a deep investigation and streams back a markdown report. Finally, a **synthesis** pass blends every report into a single consolidated document.
+You give Swarm Intel a research topic. An **orchestrator** model first diagnoses what the research need actually requires (its "mission analysis"), then sprouts a bespoke team of named specialist agents from that diagnosis — as many as the need demands in AUTO mode, or a pinned count of 3–9. You review and refine that team, then each agent runs a live-web-grounded investigation and streams back a markdown report. Finally, a **synthesis** pass blends every report into a single consolidated document.
 
 - 🧠 **Orchestrated swarm assembly** — one prompt becomes a complementary team of 5 to 7 specialist personas, each with a role, an investigative angle, and a theme color.
 - ✋ **Human-in-the-loop approval** — before any research runs, nudge an individual agent with a plain-language critique to regenerate just that node, or rebuild the whole team.
@@ -25,7 +25,9 @@ You give Swarm Intel a research topic. An **orchestrator** model breaks it into 
 - 🔒 **Keys stay server-side** — the browser never sees a provider key; every call is proxied through the local Express server.
 - 💾 **Everything persists locally** — history, the current session, activity logs, and settings all live in `localStorage`.
 - 🕸️ **Mission Control** — a live animated network view of the running swarm (Grid/Network toggle), with packet flows reversing toward the hub during synthesis.
-- 🎛️ **Mission Parameters** — pick swarm size (3–9) and research depth (Recon/Standard/Deep); recruit custom specialists or dismiss nodes at approval.
+- 🎛️ **Mission Parameters** — swarm size AUTO (need-driven) or pinned 3–9, plus research depth (Recon/Standard/Deep); recruit custom specialists or dismiss nodes at approval.
+- 🌐 **Real web grounding on every provider** — Gemini, Anthropic, OpenRouter, and Venice use their native web search; LM Studio, Ollama, and plain OpenAI get live SearXNG results injected server-side (set `SEARXNG_BASE_URL` in `.env`). The ops log reports each agent's grounding mode, and warns when a run had no live data.
+- 🔁 **Follow-up commissions** — from the Interrogation Room, launch a follow-up swarm that carries the prior run's synthesis and chat as established context. The new team targets the gaps instead of re-covering old ground, and its synthesis states what it adds, confirms, or overturns versus the prior report.
 - 🛡️ **Red Team round** — optional adversarial pass where VEX cross-examines every report, and the synthesis must rebut or concede each critique.
 - 💬 **Interrogation Room** — chat with the completed swarm, grounded strictly in its reports, panel-wide or specialist-in-persona.
 - 📦 **Dossier Export Suite** — standalone HTML dossier, print-to-PDF paper theme, and a full-screen Reader Mode with auto-TOC.
@@ -85,7 +87,7 @@ sequenceDiagram
 
     User->>SPA: Enter research topic
     SPA->>API: POST /api/research/initiate
-    API->>LLM: Orchestrator assembles 5-7 agents
+    API->>LLM: Orchestrator analyzes the need, sprouts agents from it
     LLM-->>API: Agent personas (JSON)
     API-->>SPA: Team returned for approval
 

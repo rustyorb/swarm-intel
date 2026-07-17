@@ -14,7 +14,9 @@ export interface Agent {
 export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "redteaming" | "synthesizing" | "completed" | "failed";
 
 export interface SwarmConfig {
-  agentCount: number;
+  // "auto" lets the orchestrator size the swarm from its analysis of the
+  // research need; a number pins the count.
+  agentCount: number | "auto";
   depth: "recon" | "standard" | "deep";
   redTeam?: boolean;
 }
@@ -24,6 +26,19 @@ export interface RedTeamCritique {
   agentName: string;
   agentRole: string;
   critique: string;
+}
+
+// Condensed context carried into a follow-up run from its parent session, so
+// the new swarm builds on established findings instead of re-deriving them.
+export interface PriorContext {
+  parentSessionId: string;
+  parentTopic: string;
+  // What the user asked the follow-up to chase (gaps, open questions).
+  directive: string;
+  // Condensed parent synthesis.
+  synthesis: string;
+  // Recent interrogation-room exchanges that motivated the follow-up.
+  chatExcerpt: string;
 }
 
 export interface ChatMessage {
@@ -40,6 +55,11 @@ export interface ResearchSession {
   id: string;
   topic: string;
   timestamp: string;
+  // Orchestrator's diagnosis of what the research need requires — the agents
+  // are sprouted from this analysis.
+  needAnalysis?: string;
+  // Present when this session is a follow-up commissioned from a prior run.
+  priorContext?: PriorContext;
   agents: Agent[];
   synthesizedReport?: string;
   status: SessionStatus;
