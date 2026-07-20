@@ -215,37 +215,67 @@ function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settin
   return { provider, model, apiKey, baseUrl };
 }
 
+// Non-streaming JSON calls MUST time out: a congested provider (e.g. a
+// brand-new model being hammered on OpenRouter) can otherwise hold the
+// connection open indefinitely, hanging the whole pipeline at "assembling"
+// with no error and no retry. 180s accommodates slow reasoning models.
+const JSON_CALL_TIMEOUT_MS = 180000;
+
 async function callOpenAICompatible(url: string, apiKey: string, body: any): Promise<any> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
-    },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Upstream API status ${response.status}: ${errorText || response.statusText}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), JSON_CALL_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {})
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Upstream API status ${response.status}: ${errorText || response.statusText}`);
+    }
+    return await response.json();
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Upstream request timed out after ${JSON_CALL_TIMEOUT_MS / 1000}s (${url}) — the provider may be overloaded; retry or switch models.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return await response.json();
 }
 
 async function callAnthropic(apiKey: string, body: any): Promise<any> {
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Anthropic API status ${response.status}: ${errorText || response.statusText}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), JSON_CALL_TIMEOUT_MS);
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Anthropic API status ${response.status}: ${errorText || response.statusText}`);
+    }
+    return await response.json();
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`Anthropic request timed out after ${JSON_CALL_TIMEOUT_MS / 1000}s — the provider may be overloaded; retry or switch models.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return await response.json();
 }
 
 // -------------------------------------------------------------
@@ -561,7 +591,9 @@ async function generateUnifiedJSON(
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
   if (provider === "gemini") {
-    const client = new GoogleGenAI({ apiKey });
+    // httpOptions.timeout mirrors JSON_CALL_TIMEOUT_MS for the SDK path —
+    // same hang risk as the raw-fetch providers.
+    const client = new GoogleGenAI({ apiKey, httpOptions: { timeout: JSON_CALL_TIMEOUT_MS } });
     const response = await client.models.generateContent({
       model: model,
       contents: prompt,
