@@ -22,6 +22,24 @@ export interface SwarmConfig {
   // Case-file mode for edge/esoteric/heterodox territory: investigation-native
   // personas, non-mainstream sourcing, Evidence Docket synthesis, open leads.
   fringeMode?: boolean;
+  // Draft the swarm exclusively from the user's saved Agent Library — the
+  // orchestrator selects (never invents) personas. Default on-the-fly
+  // generation is untouched when off.
+  rosterMode?: boolean;
+}
+
+// A reusable specialist persona saved by the user. In Roster Mode the
+// orchestrator drafts exclusively from these: identity (id/name/role/color)
+// is locked, and only the per-mission assignment is tailored to the topic,
+// derived from the persona's standing specialty (investigativeAngle).
+export interface SavedAgent {
+  id: string;
+  name: string;
+  role: string;
+  investigativeAngle: string;
+  colorTheme: string;
+  savedAt: string;
+  timesDeployed?: number;
 }
 
 // A followable investigative thread from a fringe-mode Evidence Docket. The

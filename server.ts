@@ -787,6 +787,11 @@ async function startServer() {
       const pinnedCount = typeof rawCount === "number" ? Math.max(3, Math.min(9, Math.round(rawCount))) : null;
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
+      const roster = !!(config && config.rosterMode);
+      // Saved Agent Library entries sent by the client only in Roster Mode.
+      const savedAgents: any[] = roster && Array.isArray(req.body.savedAgents)
+        ? req.body.savedAgents.filter((a: any) => a && a.id && a.name && a.role)
+        : [];
 
       let depthHint = "";
       if (depth === "recon") {
@@ -795,7 +800,126 @@ async function startServer() {
         depthHint = "\nDEPTH MODE — DEEP: Make each agent's assignment maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
       }
 
-      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
+      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}${roster ? "ROSTER " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
+
+      // ROSTER MODE: draft exclusively from the user's saved Agent Library.
+      // A fully separate early-return path — the default on-the-fly generation
+      // below is deliberately untouched.
+      if (roster) {
+        if (savedAgents.length < 2) {
+          return res.status(400).json({ error: "Roster Mode needs at least 2 agents in your Agent Library. Save specialists from a swarm (bookmark icon on their card) or forge them in the Agent Library, then relaunch." });
+        }
+
+        const maxPick = Math.min(9, savedAgents.length);
+        const rosterListing = savedAgents
+          .map((a: any) => `- id "${a.id}" — ${a.name}, ${a.role}. Standing specialty: ${String(a.investigativeAngle || "").slice(0, 400)}`)
+          .join("\n");
+
+        const today2 = new Date().toDateString();
+        const followUpFraming2 = priorBlock
+          ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Draft the members whose specialties best target what is missing or unresolved.`
+          : "";
+
+        const rosterPrompt = `Today's date is ${today2}.
+
+RESEARCH REQUEST: "${topic}"${followUpFraming2}
+
+ROSTER MODE: You must draft the team EXCLUSIVELY from the user's saved Agent Library below. You may NOT invent new agents, rename anyone, or alter identities — selection and per-mission tasking only.
+
+AGENT LIBRARY:
+${rosterListing}
+
+Work in two phases.
+
+PHASE 1 — ANALYZE THE RESEARCH NEED:
+Diagnose what this request actually requires and which expertise it demands. Write a concise mission analysis of 60-140 words (the "needAnalysis" field). Note where the library covers the need well and where coverage is thin.
+
+PHASE 2 — DRAFT FROM THE LIBRARY:
+Select ${pinnedCount ? `exactly ${Math.min(pinnedCount, maxPick)}` : `between 2 and ${maxPick} (your call — exactly as many as the need demands, no padding)`} agents from the library, by their exact ids.
+- Choose ONLY members whose standing specialty genuinely serves this mission — do not pad the team with poor fits.
+- For each selected agent, write a "missionAngle": a specific investigative assignment for THIS topic that builds directly on their standing specialty, stating what they must find out and which kinds of sources or evidence to chase.${depthHint}${fringe ? `\n${FRINGE_ORCHESTRATOR_HINT}` : ""}`;
+
+        const rosterSystemInstruction = "You are an elite Research Swarm Orchestrator operating in ROSTER MODE. You draft investigation teams exclusively from the user's saved agent library — never inventing, renaming, or reshaping personas — and tailor each drafted member's mission assignment to the research need.";
+
+        const rosterSchema = {
+          type: Type.OBJECT,
+          properties: {
+            needAnalysis: {
+              type: Type.STRING,
+              description: "Concise diagnosis (60-140 words) of what this research need requires and how the library covers it."
+            },
+            selections: {
+              type: Type.ARRAY,
+              description: "The drafted team, selected from the library by exact id.",
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING, description: "EXACT id of a library agent (copy verbatim from the AGENT LIBRARY list)" },
+                  missionAngle: { type: Type.STRING, description: "Topic-specific investigative assignment building on this agent's standing specialty" },
+                },
+                required: ["id", "missionAngle"],
+              },
+            },
+          },
+          required: ["needAnalysis", "selections"],
+        };
+
+        const byId = new Map(savedAgents.map((a: any) => [String(a.id), a]));
+        let drafted: any[] = [];
+        let rosterNeedAnalysis = "";
+        let rosterLastError: any = null;
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const attemptPrompt = attempt === 1
+            ? rosterPrompt
+            : `${rosterPrompt}\n\nIMPORTANT: Your previous response was unusable. Return ONLY a single raw JSON object with a "needAnalysis" string and a "selections" array of FLAT objects, each having exactly these string keys: id (copied VERBATIM from the AGENT LIBRARY list), missionAngle.`;
+
+          let result: any = null;
+          try {
+            result = await generateUnifiedJSON("orchestrator", settings, attemptPrompt, rosterSystemInstruction, rosterSchema);
+          } catch (err: any) {
+            rosterLastError = err;
+            console.warn(`[Initiate/Roster] Attempt ${attempt}: unparseable — ${err.message}`);
+            continue;
+          }
+
+          let selections: any[] = Array.isArray(result?.selections) ? result.selections : Array.isArray(result) ? result : [];
+          // Hallucinated or malformed picks are discarded, never repaired into
+          // new personas — identity lock is the point of Roster Mode.
+          const seenIds = new Set<string>();
+          selections = selections.filter((s: any) => {
+            if (!s || typeof s.id !== "string" || !byId.has(s.id) || seenIds.has(s.id)) return false;
+            seenIds.add(s.id);
+            return true;
+          });
+
+          if (selections.length >= 2) {
+            drafted = selections;
+            rosterNeedAnalysis = typeof result?.needAnalysis === "string" ? result.needAnalysis.trim() : "";
+            break;
+          }
+          console.warn(`[Initiate/Roster] Attempt ${attempt}: only ${selections.length} valid library picks. Raw: ${JSON.stringify(result).slice(0, 600)}`);
+        }
+
+        if (drafted.length < 2) {
+          throw new Error(`Roster selection failed — the orchestrator could not draft a valid team from your Agent Library${rosterLastError ? ` (${rosterLastError.message?.slice(0, 200)})` : ""}. Try a different orchestrator model, or check that library specialties are described clearly.`);
+        }
+
+        const rosterAgents = drafted.slice(0, maxPick).map((s: any) => {
+          const src = byId.get(s.id);
+          return {
+            id: src.id,
+            name: src.name,
+            role: src.role,
+            investigativeAngle: (typeof s.missionAngle === "string" && s.missionAngle.trim())
+              ? s.missionAngle.trim()
+              : src.investigativeAngle,
+            colorTheme: src.colorTheme || "cyan",
+          };
+        });
+
+        return res.json({ agents: rosterAgents, needAnalysis: rosterNeedAnalysis });
+      }
 
       const today = new Date().toDateString();
       const followUpFraming = priorBlock

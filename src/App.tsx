@@ -46,7 +46,10 @@ import {
   BookOpenText,
   LibraryBig,
   ShieldAlert,
-  Eye
+  Eye,
+  Users,
+  BookmarkPlus,
+  BookmarkCheck
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -55,11 +58,13 @@ import SwarmNetwork from "./components/SwarmNetwork";
 import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
+import AgentLibrary from "./components/AgentLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, Lead, PriorContext, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
+const ROSTER_HEX = "#3b82f6";
 
 const SAMPLE_TOPICS = [
   "Post-lithium solid-state electrolyte battery market readiness for commercial UAVs (2025-2030).",
@@ -166,10 +171,13 @@ function MissionParameters({
   config,
   onChange,
   compact = false,
+  libraryCount = 0,
 }: {
   config: SwarmConfig;
   onChange: (config: SwarmConfig) => void;
   compact?: boolean;
+  // Saved Agent Library size — Roster Mode needs at least 2.
+  libraryCount?: number;
 }) {
   // Count runs AUTO ← 3 … 9: stepping below 3 hands sizing to the
   // orchestrator, which sprouts as many agents as the research need demands.
@@ -253,6 +261,47 @@ function MissionParameters({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Roster Mode toggle — draft only from the saved Agent Library */}
+      <div className={compact ? "mt-3" : "mt-4"}>
+        <button
+          onClick={() => onChange({ ...config, rosterMode: !config.rosterMode })}
+          disabled={!config.rosterMode && libraryCount < 2}
+          className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          title={libraryCount < 2 && !config.rosterMode
+            ? "Roster Mode needs at least 2 saved agents — bookmark specialists from a swarm or forge them in the Agent Library"
+            : "Draft the swarm exclusively from your saved Agent Library — the orchestrator selects and tasks personas, never invents them"}
+        >
+          <div className="flex items-center gap-2 min-w-0 text-left">
+            <Users
+              className="w-3.5 h-3.5 flex-shrink-0 transition-colors"
+              style={{ color: config.rosterMode ? ROSTER_HEX : undefined }}
+            />
+            <div className="min-w-0">
+              <div
+                className="text-[9px] font-mono uppercase tracking-widest font-bold transition-colors"
+                style={{ color: config.rosterMode ? ROSTER_HEX : undefined }}
+              >
+                Roster Mode
+              </div>
+              {!compact && (
+                <div className="text-[9px] font-mono text-text-muted mt-0.5">
+                  Draft only from your Agent Library ({libraryCount} saved)
+                </div>
+              )}
+            </div>
+          </div>
+          <span
+            className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${config.rosterMode ? "" : "bg-border-warm"}`}
+            style={config.rosterMode ? { background: ROSTER_HEX } : undefined}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary transition-transform"
+              style={{ transform: config.rosterMode ? "translateX(16px)" : "translateX(0)" }}
+            />
+          </span>
+        </button>
       </div>
 
       {/* Fringe Mode case-file toggle */}
@@ -529,6 +578,7 @@ export default function App() {
           agentCount: typeof parsed.agentCount === "number" ? Math.max(3, Math.min(9, parsed.agentCount)) : "auto",
           depth: ["recon", "standard", "deep"].includes(parsed.depth) ? parsed.depth : "standard",
           ...(parsed.fringeMode === true ? { fringeMode: true } : {}),
+          ...(parsed.rosterMode === true ? { rosterMode: true } : {}),
         };
       }
     } catch (e) {
@@ -540,6 +590,53 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("research_swarm_config", JSON.stringify(swarmConfig));
   }, [swarmConfig]);
+
+  // Agent Library: user-saved specialist personas, independent of sessions.
+  // Roster Mode drafts exclusively from this list.
+  const [agentLibrary, setAgentLibrary] = useState<SavedAgent[]>(() => {
+    try {
+      const stored = localStorage.getItem("research_swarm_agent_library");
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((a: any) => a && a.id && a.name && a.role && a.investigativeAngle);
+        }
+      }
+    } catch (e) {
+      // Ignore malformed library
+    }
+    return [];
+  });
+  const [showAgentLibrary, setShowAgentLibrary] = useState(false);
+
+  useEffect(() => {
+    localStorage.setItem("research_swarm_agent_library", JSON.stringify(agentLibrary));
+  }, [agentLibrary]);
+
+  const isAgentInLibrary = (agent: { name: string; role: string }) =>
+    agentLibrary.some(s => s.name === agent.name && s.role === agent.role);
+
+  // Saving an already-saved persona (same name+role) refreshes its specialty
+  // and color instead of duplicating it.
+  const saveAgentToLibrary = (agent: { name: string; role: string; investigativeAngle: string; colorTheme: string }) => {
+    setAgentLibrary(prev => {
+      const existing = prev.find(s => s.name === agent.name && s.role === agent.role);
+      if (existing) {
+        return prev.map(s => s.id === existing.id
+          ? { ...s, investigativeAngle: agent.investigativeAngle, colorTheme: agent.colorTheme }
+          : s);
+      }
+      return [...prev, {
+        id: `saved-${Date.now()}-${prev.length}`,
+        name: agent.name,
+        role: agent.role,
+        investigativeAngle: agent.investigativeAngle,
+        colorTheme: agent.colorTheme,
+        savedAt: new Date().toLocaleDateString(),
+      }];
+    });
+    addLog("SYSTEM", `${agent.name} (${agent.role}) saved to the Agent Library.`, "success", agent.colorTheme);
+  };
 
   // Custom specialist recruitment modal (approval stage)
   const [showRecruitModal, setShowRecruitModal] = useState(false);
@@ -853,6 +950,11 @@ export default function App() {
   const handleInitiateResearch = async (searchTopic: string, priorContext?: PriorContext) => {
     if (!searchTopic.trim()) return;
 
+    if (swarmConfig.rosterMode && agentLibrary.length < 2) {
+      addLog("SYSTEM", "Roster Mode is on but the Agent Library has fewer than 2 saved agents. Save specialists or disable Roster Mode.", "warning");
+      return;
+    }
+
     setTopic(searchTopic);
     setLogs([]);
     setAssemblyStep(0);
@@ -879,7 +981,15 @@ export default function App() {
       const response = await fetch("/api/research/initiate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: searchTopic, settings: settings, config: swarmConfig, priorContext }),
+        body: JSON.stringify({
+          topic: searchTopic,
+          settings: settings,
+          config: swarmConfig,
+          priorContext,
+          // Roster Mode drafts from the saved library; omit otherwise to keep
+          // the default payload unchanged.
+          ...(swarmConfig.rosterMode ? { savedAgents: agentLibrary } : {}),
+        }),
       });
 
       if (!response.ok) {
@@ -899,6 +1009,14 @@ export default function App() {
 
       if (loadedAgents.length === 0) {
         throw new Error("The orchestrator returned zero agents. Check the orchestrator model in Settings — some models fail to produce the required JSON structure.");
+      }
+
+      // Roster Mode: drafted agents keep their library ids — tally deployments.
+      if (swarmConfig.rosterMode) {
+        const deployedIds = new Set(loadedAgents.map(a => a.id));
+        setAgentLibrary(prev => prev.map(s => deployedIds.has(s.id)
+          ? { ...s, timesDeployed: (s.timesDeployed || 0) + 1 }
+          : s));
       }
 
       const needAnalysis: string = typeof data.needAnalysis === "string" ? data.needAnalysis : "";
@@ -1524,6 +1642,15 @@ export default function App() {
           >
             <LibraryBig className="w-3.5 h-3.5 text-accent-warm" />
             <span className="hidden md:inline">Library</span>
+          </button>
+          <button
+            id="btn-open-agent-library"
+            onClick={() => setShowAgentLibrary(true)}
+            className="px-3 py-2 rounded-lg border border-border-warm bg-bg-surface hover:bg-bg-primary text-text-muted hover:text-text-secondary transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer"
+            title="Open the Agent Library — saved specialists for Roster Mode"
+          >
+            <Users className="w-3.5 h-3.5" style={{ color: ROSTER_HEX }} />
+            <span className="hidden md:inline">Agents</span>
             {history.length > 0 && (
               <span className="text-[9px] font-mono bg-bg-primary border border-border-warm text-text-secondary px-1.5 py-0.5 rounded-full leading-none">
                 {history.length}
@@ -1598,7 +1725,7 @@ export default function App() {
               </div>
 
               {(!session || session.status === "idle" || session.status === "failed") && (
-                <MissionParameters config={swarmConfig} onChange={setSwarmConfig} compact />
+                <MissionParameters config={swarmConfig} onChange={setSwarmConfig} compact libraryCount={agentLibrary.length} />
               )}
 
               {(!session || session.status === "idle" || session.status === "failed") && (
@@ -1812,7 +1939,7 @@ export default function App() {
                 </div>
 
                 <div className="mt-4">
-                  <MissionParameters config={swarmConfig} onChange={setSwarmConfig} />
+                  <MissionParameters config={swarmConfig} onChange={setSwarmConfig} libraryCount={agentLibrary.length} />
                 </div>
 
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mt-4 pt-3 border-t border-border-warm">
@@ -2216,6 +2343,17 @@ export default function App() {
 
                         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
                           <span className="rpg-level">LV {sheet.level}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              saveAgentToLibrary(agent);
+                            }}
+                            className="w-5 h-5 rounded-md flex items-center justify-center transition-all cursor-pointer hover:bg-bg-primary"
+                            style={{ color: isAgentInLibrary(agent) ? ROSTER_HEX : undefined }}
+                            title={isAgentInLibrary(agent) ? "In Agent Library — click to refresh their saved specialty" : "Save this specialist to the Agent Library"}
+                          >
+                            {isAgentInLibrary(agent) ? <BookmarkCheck className="w-3.5 h-3.5" /> : <BookmarkPlus className="w-3.5 h-3.5 text-text-muted hover:text-text-secondary" />}
+                          </button>
                           {session.status === "approval" && session.agents.length > 2 && (
                             <button
                               onClick={(e) => {
@@ -2849,6 +2987,17 @@ export default function App() {
           Intelligence Swarm Architecture © 2026. All Threads Operating Within Nominal Bounds.
         </div>
       </footer>
+
+      {/* Agent Library overlay — saved specialists for Roster Mode */}
+      {showAgentLibrary && (
+        <AgentLibrary
+          library={agentLibrary}
+          onClose={() => setShowAgentLibrary(false)}
+          onForge={(agent) => saveAgentToLibrary(agent)}
+          onDelete={(id) => setAgentLibrary(prev => prev.filter(s => s.id !== id))}
+          getAgentColorHex={getAgentColorHex}
+        />
+      )}
 
       {/* Knowledge Library overlay */}
       {libraryOpen && (
