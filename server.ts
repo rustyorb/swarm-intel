@@ -6,8 +6,11 @@ import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 
-// Load environment variables
-dotenv.config();
+// Load environment variables. override:true makes .env authoritative over
+// inherited shell/machine env vars — without it, a stale system-level key
+// (e.g. an exhausted OPENAI_API_KEY set in Windows) silently beats a fresh
+// one in .env, because dotenv's default is to NOT overwrite existing vars.
+dotenv.config({ override: true });
 
 // Validate Gemini API Key
 const apiKey = process.env.GEMINI_API_KEY;
