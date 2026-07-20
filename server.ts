@@ -417,9 +417,12 @@ FOLLOW-UP DIRECTIVE FROM THE USER: "${directive}"`;
 // conclude "insufficient to conclude".
 
 const FRINGE_ORCHESTRATOR_HINT = `
-FRINGE MODE — CASE FILE INVESTIGATION: This topic sits on the edges of mainstream coverage (fringe, esoteric, anomalous, heterodox, or frontier territory). Frame your mission analysis as OPENING A CASE FILE: what is actually claimed or reported, what evidence could exist, where that evidence would live, and what would move the case forward. Sprout investigation-native specialists fitted to this exact territory — examples of the species: an archives/FOIA hound for declassified and official records, an insider-practitioner fluent in the community's own literature, a historian of the subject's lineage, an anomaly cataloguer who inventories documented incidents, a lore cartographer mapping claims to their original sources, a frontier-lab watcher for research edges. Derive the team from the topic; do not force these examples. Do NOT field a mainstream-consensus gatekeeper persona ("the debunker") — in a case file, rigor lives in provenance, not dismissal.`;
+FRINGE MODE — CASE FILE INVESTIGATION: This topic sits on the edges of mainstream coverage (fringe, esoteric, anomalous, heterodox, or frontier territory). Frame your mission analysis as OPENING A CASE FILE: what is actually claimed or reported, what evidence could exist, where that evidence would live, and what would move the case forward. Sprout investigation-native specialists fitted to this exact territory — examples of the species: an archives/FOIA hound for declassified and official records, an insider-practitioner fluent in the community's own literature, a historian of the subject's lineage, an anomaly cataloguer who inventories documented incidents, a lore cartographer mapping claims to their original sources, a frontier-lab watcher for research edges. Derive the team from the topic; do not force these examples. Do NOT field a mainstream-consensus gatekeeper persona ("the debunker") — in a case file, rigor lives in provenance, not dismissal.
+ANCHOR REQUIREMENT (critical): each specialist's investigative assignment must NAME 2-4 concrete anchors to run down — specific facilities, programs, products, texts, traditions, researchers, or incidents — drawn from YOUR OWN knowledge of this territory's canon, including canonical examples the research request itself never mentions. An abstract mandate hides concrete trailheads; a fringe veteran already knows where they are. Abstract assignments ("analyze the pattern of...") with no named anchors are unacceptable.`;
 
 const FRINGE_AGENT_RULES = `FRINGE INVESTIGATION RULES (mandatory — you are working a CASE FILE, not writing a verdict):
+- CANON FIRST. Before anything else, lay out what the fringe/esoteric canon already holds on this territory FROM YOUR OWN KNOWLEDGE: the relevant traditions and their key terms, the texts and researchers, the recurring symbols and codename lineages, and the famous prior cases — then use live search to verify, date, and extend that map. A fringe veteran starts from the canon in their head, not from a blank search box. Name names; abstract pattern-talk without named anchors is a failed investigation.
+- CONNECT ACROSS DOMAINS. The method of this territory is lineage-tracing: the same name, number, or symbol recurring across eras and institutions (a defense facility, an ancient tradition, a consumer product) IS the evidence trail. When you meet a loaded name, actively sweep the other domains it might appear in.
 - Investigations accumulate. Collect and catalog evidence; do NOT close the case because early evidence is thin. A detective does not find the first clue and declare the crime never happened.
 - Document the territory ON ITS OWN TERMS: map the claims, incidents, lineages, key figures, and internal logic faithfully. Do not pad the report with reflexive "however, experts dismiss this" hedging — skepticism belongs in provenance, not editorializing.
 - PROVENANCE-TAG every major claim with one of: [primary text], [community lore], [witness testimony], [documented anomaly], [official record], [verified]. Let the tags do the epistemics.
@@ -489,6 +492,61 @@ const DELTA_SYNTHESIS_STRUCTURE = (topic: string) => `# ${topic}: Delta Briefing
 ## 6. Watch Items
 - What to monitor before the next sweep: pending decisions, expected releases, unresolved corrections, and weak signals that could mature into changes.
 - Format each as: "WATCH: <the specific thing> — TRIGGER: <what movement would look like>".`;
+
+// -------------------------------------------------------------
+// Search Query Planner
+// -------------------------------------------------------------
+// Abstract mission seeds ("investigate the systemic pattern of...") produce
+// abstract, useless search strings when queries are derived from the raw
+// topic text. This pre-search step asks the orchestrator-role model to
+// CONCRETIZE: name specific real-world entities (facilities, programs,
+// products, people) that the mandate implies — including well-known examples
+// the model knows of that the topic text never names. Falls back to naive
+// topic/angle queries on any failure.
+async function planSearchQueries(
+  topic: string,
+  angle: string,
+  fringe: boolean,
+  settings: any
+): Promise<string[]> {
+  try {
+    const schema = {
+      type: Type.OBJECT,
+      properties: {
+        queries: {
+          type: Type.ARRAY,
+          description: "4-6 concrete web search queries",
+          items: { type: Type.STRING },
+        },
+      },
+      required: ["queries"],
+    };
+    const prompt = `RESEARCH TOPIC: "${topic.slice(0, 1500)}"
+ASSIGNED INVESTIGATIVE ANGLE: "${angle.slice(0, 600)}"
+
+Generate 4-6 concrete web search queries for this investigation. Rules:
+- CONCRETIZE. Name specific entities — facilities, programs, products, people, organizations, documents — that this investigation should check. Include well-known real-world examples YOU know of that fit the topic's pattern, even when the topic text does not name them. An abstract mandate hides concrete anchors; your job is to surface them.
+- Each query is a tight search-engine string (2-8 words), not a sentence or a question.
+- Queries must not overlap heavily with each other.${fringe ? `
+- This is a FRINGE case-file investigation. THINK LIKE A VETERAN FRINGE RESEARCHER: draw on your knowledge of the esoteric/occult canon (Sumerian, Hermetic, alchemical, Thelemic, modern conspiracy-research literature), known symbol and codename lineages, classified-program insignia lore, and famous prior cases in this territory. Name the canonical anchors — specific facilities, program names, texts, researchers, incidents — that a fringe veteran would immediately check for this mandate.
+- Include one query using site:archive.org and one aimed at declassified/FOIA material where relevant.` : ""}`;
+
+    const result = await generateUnifiedJSON(
+      "orchestrator",
+      settings,
+      prompt,
+      "You are a research search-query planner. You turn abstract research mandates into concrete, high-recall web search queries, naming the specific real-world entities the mandate implies — including canonical examples the mandate's author left unstated.",
+      schema
+    );
+    return (Array.isArray(result?.queries) ? result.queries : [])
+      .filter((q: any) => typeof q === "string" && q.trim().length > 0)
+      .map((q: string) => q.trim().slice(0, 120))
+      .slice(0, 6);
+  } catch (err: any) {
+    console.warn(`[QueryPlan] Planning failed (${err.message}) — falling back to naive topic/angle queries.`);
+    return [];
+  }
+}
 
 async function generateUnifiedJSON(
   taskRole: "orchestrator" | "agent" | "synthesis",
@@ -1351,7 +1409,7 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
       // and practitioner communities alongside a mainstream baseline query.
       const currentYear = new Date().getFullYear();
       const shortTopic = String(topic).slice(0, 160);
-      const searchQueries = fringe
+      const naiveQueries = fringe
         ? [
             String(topic).slice(0, 220),
             String(agent.investigativeAngle || "").slice(0, 220),
@@ -1364,6 +1422,18 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
             String(agent.investigativeAngle || "").slice(0, 220),
             `${shortTopic} latest ${currentYear}`,
           ].filter((q) => q.trim().length > 0);
+
+      // Concretize the mandate into named-entity queries (one extra
+      // orchestrator-model call). Keep one raw-topic query as a baseline;
+      // fall back to the naive set entirely if planning fails.
+      const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings);
+      const searchQueries = planned.length >= 2 ? [...planned, shortTopic] : naiveQueries;
+      if (planned.length >= 2) {
+        console.log(`[QueryPlan] ${agent.name}: ${planned.map((q) => `"${q}"`).join(" | ")}`);
+        // Native-search providers run their own queries — hand them the same
+        // concrete anchors through the prompt.
+        prompt = `${prompt}\n\nSEARCH PLAN (concrete anchors this investigation must run down and verify via live search): ${planned.join("; ")}`;
+      }
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
@@ -1403,7 +1473,7 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, reports, settings, config, critiques, priorContext } = req.body;
+      const { topic, reports, settings, config, critiques, priorContext, catalyticTerms } = req.body;
       if (!topic || !reports || !Array.isArray(reports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
@@ -1455,6 +1525,21 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
         }
       }
 
+      // Catalytic terms from the pre-synthesis cross-check: loaded names that
+      // surfaced in reports without being assigned. Synthesis must address
+      // each one — unresolved terms become explicit follow-up threads.
+      let catalyticBlock = "";
+      let catalyticDirective = "";
+      const cleanCatalytic = Array.isArray(catalyticTerms)
+        ? catalyticTerms.filter((t: any) => t && typeof t.term === "string" && t.term.trim()).slice(0, 10)
+        : [];
+      if (cleanCatalytic.length > 0) {
+        catalyticBlock = `\n\nCATALYTIC TERMS (flagged by the post-report cross-check — these loaded names surfaced in the specialist reports WITHOUT having been assigned in any investigative angle):\n${cleanCatalytic.map((t: any) => `- "${t.term}"${t.why ? ` — ${String(t.why).slice(0, 300)}` : ""}`).join("\n")}`;
+        catalyticDirective = `\n\n## Catalytic Terms Review
+- Address EVERY catalytic term listed above explicitly: what the file establishes about it, what remains unexamined, and whether it recurs across domains.
+- Any catalytic term the file cannot resolve MUST be emitted as a specific follow-up thread${fringe ? " in the Open Leads section" : " in the further-investigation recommendations"}.`;
+      }
+
       const followUpContextBlock = priorBlock
         ? `\n\n${priorBlock}\n\nThis synthesis concludes a FOLLOW-UP investigation commissioned against the prior findings above.`
         : "";
@@ -1504,6 +1589,8 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 ## 6. Synthesis Conclusion
 - Final summarizing statement.`;
 
+      const structureWithCatalytic = `${structureBody}${catalyticDirective}`;
+
       const prompt = `OVERARCHING TOPIC: "${topic}"
 
 You are the Lead Swarm Orchestrator. ${fringe
@@ -1511,10 +1598,10 @@ You are the Lead Swarm Orchestrator. ${fringe
         : "Your mission is to synthesize the following expert investigative reports into a single, comprehensive, publication-grade analytical document."}
 
 SPECIALIST REPORTS:
-${reportsContext}${critiquesBlock}${followUpContextBlock}
+${reportsContext}${critiquesBlock}${followUpContextBlock}${catalyticBlock}
 
 REQUIRED OUTPUT STRUCTURE:
-${structureBody}
+${structureWithCatalytic}
 
 STYLE GUIDELINES:
 ${fringe
@@ -1554,6 +1641,81 @@ ${fringe
       console.error("Error in /api/research/synthesize-stream:", error);
       res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Synthesis failed." })}\n\n`);
       res.end();
+    }
+  });
+
+  // 3.3. Catalytic Scan Endpoint — the "snowball" cross-check the swarm's own
+  // post-mortem requested: after all reports land, find loaded terms (proper
+  // nouns, recurring names/symbols) that surfaced in the reports WITHOUT
+  // having been assigned in any investigative angle. Synthesis is then forced
+  // to address each one instead of letting it slip through unexamined.
+  app.post("/api/research/catalytic-scan", async (req, res) => {
+    try {
+      const { topic, reports, angles, settings, fringeMode } = req.body;
+      if (!Array.isArray(reports) || reports.length === 0) {
+        return res.status(400).json({ error: "A non-empty reports array is required." });
+      }
+
+      const reportsBlock = reports
+        .filter((r: any) => r && r.report)
+        .map((r: any) => `### ${r.agentName || "Specialist"} (${r.agentRole || "Investigator"})\n${String(r.report).slice(0, 9000)}`)
+        .join("\n\n");
+      const anglesBlock = (Array.isArray(angles) ? angles : [])
+        .map((a: any) => `- ${String(a).slice(0, 300)}`)
+        .join("\n");
+
+      console.log(`Catalytic scan across ${reports.length} reports for topic: "${String(topic).slice(0, 80)}"`);
+
+      const prompt = `TOPIC: "${String(topic).slice(0, 800)}"
+
+ORIGINAL INVESTIGATIVE ASSIGNMENTS (what the team was actually tasked with):
+${anglesBlock || "(none provided)"}
+
+SPECIALIST REPORTS:
+${reportsBlock}
+
+Identify 3-8 CATALYTIC TERMS: loaded proper nouns, names, numbers, or symbols that (a) appear in the reports above, (b) were NOT named in the original assignments, and (c) warrant a dedicated sweep of their own — especially terms that recur across multiple reports or across domains (a facility name that is also a product name, a symbol that is also a tradition's term of art${fringeMode ? ", an esoteric term with an institutional echo" : ""}).
+For each, give the exact term and one sentence on why it is catalytic (where it surfaced and what it might connect). Skip generic vocabulary — only terms a follow-up investigator should chase.`;
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          terms: {
+            type: Type.ARRAY,
+            description: "Catalytic terms surfaced by the scan.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                term: { type: Type.STRING, description: "The exact loaded term/name/symbol" },
+                why: { type: Type.STRING, description: "One sentence: where it surfaced and what it might connect" },
+              },
+              required: ["term", "why"],
+            },
+          },
+        },
+        required: ["terms"],
+      };
+
+      const result = await generateUnifiedJSON(
+        "orchestrator",
+        settings,
+        prompt,
+        "You are a catalytic-term scanner for an investigative research swarm. You spot the loaded names and symbols that surfaced mid-investigation without being assigned — the threads that would otherwise slip through unexamined — with a veteran researcher's nose for cross-domain recurrence.",
+        responseSchema
+      );
+      const rawTerms = Array.isArray(result?.terms) ? result.terms : [];
+      const cleanTerms = rawTerms
+        .filter((t: any) => t && typeof t.term === "string" && t.term.trim())
+        .slice(0, 10)
+        .map((t: any) => ({
+          term: t.term.trim().slice(0, 80),
+          why: typeof t.why === "string" ? t.why.trim().slice(0, 300) : "",
+        }));
+
+      res.json({ terms: cleanTerms });
+    } catch (error: any) {
+      console.error("Error in /api/research/catalytic-scan:", error);
+      res.status(500).json({ error: error.message || "Catalytic scan failed." });
     }
   });
 

@@ -1410,6 +1410,41 @@ export default function App() {
       return;
     }
 
+    // Catalytic scan ("snowball" cross-check): find loaded terms that surfaced
+    // in the reports without having been assigned in any angle, so synthesis
+    // must address them instead of letting them slip through. Non-fatal.
+    let catalyticTerms: { term: string; why: string }[] = [];
+    try {
+      addLog("ORCHESTRATOR", "Catalytic scan — sweeping reports for unassigned loaded terms...", "system");
+      const scanResponse = await fetch("/api/research/catalytic-scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic: currentSession.topic,
+          reports: validReports.map(r => ({ agentName: r.name, agentRole: r.role, report: r.report })),
+          angles: currentSession.agents.map(a => a.investigativeAngle),
+          settings: settings,
+          fringeMode: !!currentSession.config?.fringeMode,
+        }),
+      });
+      if (scanResponse.ok) {
+        const scanData = await scanResponse.json();
+        if (Array.isArray(scanData.terms) && scanData.terms.length > 0) {
+          catalyticTerms = scanData.terms;
+          setSession(prev => prev ? { ...prev, catalyticTerms } : null);
+          for (const t of catalyticTerms) {
+            addLog("ORCHESTRATOR", `CATALYTIC: "${t.term}" surfaced unassigned — ${t.why}`, "warning");
+          }
+        } else {
+          addLog("ORCHESTRATOR", "Catalytic scan: no unassigned loaded terms detected.", "info");
+        }
+      } else {
+        addLog("ORCHESTRATOR", "Catalytic scan failed — proceeding without the cross-check.", "warning");
+      }
+    } catch (scanErr: any) {
+      addLog("ORCHESTRATOR", `Catalytic scan failed (${scanErr.message}) — proceeding without the cross-check.`, "warning");
+    }
+
     // Optional adversarial Red Team pass: VEX cross-examines each specialist report before synthesis.
     const critiques: RedTeamCritique[] = [];
     if (currentSession.config?.redTeam) {
@@ -1549,7 +1584,8 @@ export default function App() {
         })),
         settings: settings,
         config: currentSession.config,
-        priorContext: currentSession.priorContext
+        priorContext: currentSession.priorContext,
+        catalyticTerms: currentSession.catalyticTerms || [],
       };
 
       const response = await fetch("/api/research/synthesize-stream", {

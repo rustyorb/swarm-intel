@@ -120,6 +120,10 @@ export interface ResearchSession {
   chat?: ChatMessage[];
   // Fringe-mode case file: leads extracted from the synthesis docket.
   leads?: Lead[];
+  // Catalytic terms: loaded names/symbols that surfaced in reports WITHOUT
+  // having been assigned in any investigative angle — the "snowball" the
+  // swarm's own post-mortem asked for. Synthesis must address each one.
+  catalyticTerms?: { term: string; why: string }[];
   // Sentinel Mode: session is under standing watch — the library offers
   // manual Delta Sweep runs against it (no scheduling; user-triggered only).
   watch?: boolean;
