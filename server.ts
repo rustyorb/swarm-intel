@@ -525,9 +525,9 @@ async function runUniversalStream(
       const { block, hitCount } = await gatherLiveContext(queries);
       if (hitCount > 0) {
         prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory): You have NO live internet access of your own — the LIVE WEB SEARCH RESULTS above are your only source of current information. Ground every time-sensitive claim in them and cite the numbered sources inline with their URLs. Where the live results do not cover a point, state that explicitly instead of presenting memorized training data as current.`;
-        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected (${provider} has no native web search)` });
+        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected (${provider} has no native web search) — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
       } else {
-        prompt = `${prompt}\n\nWARNING: No live web data could be retrieved for this run. You must explicitly flag that your findings come from model training data and may be outdated, and date-stamp any claim that could have changed.`;
+        prompt = `${prompt}\n\nWARNING — LIVE SEARCH UNAVAILABLE (a tooling failure, NOT a reflection on the topic): no live web data could be retrieved for this run. You MUST state this plainly at the top of your report. Your training data may predate recent events, so NEVER declare that something "does not exist" or that there is "no evidence" of it based on memory alone — recent products, events, and coverage may simply postdate your knowledge. Write "live verification was unavailable this run" instead, flag memory-based findings as potentially outdated, and date-stamp any claim that could have changed.`;
         onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL} returned no results) — falling back to model knowledge` });
       }
     } catch (err: any) {
@@ -1221,7 +1221,7 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       // prefer live web findings over memory, and must cite sources.
       const today = new Date().toDateString();
       const datePreamble = `Today's date is ${today}. Your training data predates this — treat live web information as authoritative over memorized knowledge, and date-stamp any claim that could have changed since your training.`;
-      const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge.`;
+      const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge. Absence from your training data is NEVER evidence of absence — do not declare a subject nonexistent or "without evidence" unless live search actually returned nothing relevant, and even then write "live search returned no coverage of this" rather than asserting it does not exist.`;
 
       let prompt: string;
       if (depth === "recon") {

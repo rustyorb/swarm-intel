@@ -9,6 +9,9 @@ export interface Agent {
   status: AgentStatus;
   report?: string;
   error?: string;
+  // How this agent's run was web-grounded: native provider search, injected
+  // SearXNG results, or none (model memory only — treat findings as stale).
+  grounding?: { mode: "native" | "injected" | "none"; detail: string };
 }
 
 export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "redteaming" | "synthesizing" | "completed" | "failed";

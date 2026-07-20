@@ -1328,13 +1328,27 @@ export default function App() {
                     };
                   });
                 } else if (data?.type === "grounding") {
-                  // Surface whether this run is actually internet-grounded
+                  // Surface whether this run is actually internet-grounded —
+                  // loudly, because a silent no-data run produces confident
+                  // stale-memory reports ("no evidence exists") that look fine.
                   addLog(
                     agent.name,
-                    `Web grounding: ${data.detail}`,
+                    data.mode === "none"
+                      ? `⚠ NO LIVE WEB DATA — this report is model memory only. ${data.detail}`
+                      : `Web grounding: ${data.detail}`,
                     data.mode === "none" ? "warning" : "info",
                     agent.colorTheme
                   );
+                  // Persist onto the agent so the report view can badge it.
+                  setSession(prev => {
+                    if (!prev) return null;
+                    return {
+                      ...prev,
+                      agents: prev.agents.map(a => a.id === agent.id
+                        ? { ...a, grounding: { mode: data.mode, detail: String(data.detail || "") } }
+                        : a)
+                    };
+                  });
                 } else if (data?.type === "error") {
                   throw new Error(data.error || "Stream error.");
                 }
@@ -2948,6 +2962,18 @@ export default function App() {
                                   {selectedAgent.status === "completed" && (
                                     <span className="text-[10px] font-bold font-mono uppercase text-success bg-success/5 px-2 py-0.5 border border-success/20 rounded">
                                       VERIFIED
+                                    </span>
+                                  )}
+                                  {selectedAgent.grounding && (
+                                    <span
+                                      className={`text-[10px] font-bold font-mono uppercase px-2 py-0.5 border rounded ${
+                                        selectedAgent.grounding.mode === "none"
+                                          ? "text-error bg-error/5 border-error/30"
+                                          : "text-success bg-success/5 border-success/20"
+                                      }`}
+                                      title={selectedAgent.grounding.detail}
+                                    >
+                                      {selectedAgent.grounding.mode === "none" ? "⚠ NO LIVE DATA" : "🌐 LIVE-GROUNDED"}
                                     </span>
                                   )}
                                 </div>
