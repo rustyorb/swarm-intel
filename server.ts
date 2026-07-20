@@ -391,6 +391,45 @@ const FRINGE_SYNTHESIS_STRUCTURE = (topic: string) => `# ${topic}: Evidence Dock
 ## 7. Case Notes
 - Closing observations: the overall quality of the file, collection gaps, and what the next commission should target.`;
 
+// -------------------------------------------------------------
+// Sentinel Mode — delta sweep prompt blocks
+// -------------------------------------------------------------
+// A delta sweep (priorContext.delta) is a follow-up run whose sole mission is
+// CHANGE DETECTION: agents hunt what moved since the prior findings instead
+// of extending them, and the synthesis becomes a Delta Briefing. Manual
+// trigger only — there is deliberately no scheduling/cron anywhere.
+
+const DELTA_ORCHESTRATOR_DIRECTIVE = `
+DELTA SWEEP — SENTINEL RE-CHECK: This run is a standing-watch sweep over a completed investigation, NOT a fresh survey. Sprout agents whose assignments are explicitly about CHANGE DETECTION since the prior run: new developments, new evidence, corrections, retractions, reversals, and shifts in the landscape the prior findings describe. Slice the prior synthesis into watch areas and assign each agent a slice — every assignment should read as "what has changed about X since the prior run", never "investigate X". Do NOT field agents to re-survey ground the prior synthesis already covers.`;
+
+const DELTA_AGENT_RULES = `DELTA RULES (mandatory — this is a sentinel sweep, not a fresh investigation):
+- Report ONLY what is NEW, CHANGED, or CORRECTED since the prior findings above. Do not restate stable prior material except as a one-line anchor for a change ("was X → now Y").
+- For every area of your assignment where nothing has moved, say so explicitly: "No change detected — <area>". A verified absence of change is a finding; silence is not.
+- Tag each finding as one of: NEW (previously unreported), CHANGED (prior finding needs updating), CORRECTED (prior finding was wrong), or CONFIRMED (prior finding independently re-verified).
+- Date-stamp every change and cite the source establishing it happened after the prior run.`;
+
+const DELTA_SYNTHESIS_STRUCTURE = (topic: string) => `# ${topic}: Delta Briefing
+
+## 1. Sweep Summary
+- One-paragraph verdict: how much has moved since the prior run — a lot, a little, or nothing — and the single most consequential change (or the absence of one).
+- State the sweep window explicitly (prior run → today).
+
+## 2. What's New
+- Developments, evidence, and events that did not exist (or were unreported) at the time of the prior findings. Date-stamp and cite each. If nothing is new, say so plainly.
+
+## 3. What Changed
+- Prior findings that still hold in essence but need updating (numbers moved, timelines shifted, positions evolved). Pair each with its prior state: "was X → now Y".
+
+## 4. What Was Overturned
+- Prior findings the sweep shows to be wrong or no longer true. State plainly what should now be believed instead, and on what evidence. "Nothing overturned" is a meaningful result — say it if true.
+
+## 5. What Stands Confirmed
+- Prior findings the sweep re-verified or found no movement against. Consolidate the specialists' explicit "no change detected" entries here.
+
+## 6. Watch Items
+- What to monitor before the next sweep: pending decisions, expected releases, unresolved corrections, and weak signals that could mature into changes.
+- Format each as: "WATCH: <the specific thing> — TRIGGER: <what movement would look like>".`;
+
 async function generateUnifiedJSON(
   taskRole: "orchestrator" | "agent" | "synthesis",
   settings: any,
@@ -792,6 +831,7 @@ async function startServer() {
       const savedAgents: any[] = roster && Array.isArray(req.body.savedAgents)
         ? req.body.savedAgents.filter((a: any) => a && a.id && a.name && a.role)
         : [];
+      const delta = !!(priorContext && priorContext.delta);
 
       let depthHint = "";
       if (depth === "recon") {
@@ -800,7 +840,7 @@ async function startServer() {
         depthHint = "\nDEPTH MODE — DEEP: Make each agent's assignment maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
       }
 
-      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}${roster ? "ROSTER " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
+      console.log(`Assembling ${delta ? "DELTA-SWEEP " : priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}${roster ? "ROSTER " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
 
       // ROSTER MODE: draft exclusively from the user's saved Agent Library.
       // A fully separate early-return path — the default on-the-fly generation
@@ -817,7 +857,7 @@ async function startServer() {
 
         const today2 = new Date().toDateString();
         const followUpFraming2 = priorBlock
-          ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Draft the members whose specialties best target what is missing or unresolved.`
+          ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Draft the members whose specialties best target what is missing or unresolved.${delta ? `\n${DELTA_ORCHESTRATOR_DIRECTIVE}` : ""}`
           : "";
 
         const rosterPrompt = `Today's date is ${today2}.
@@ -922,8 +962,10 @@ Select ${pinnedCount ? `exactly ${Math.min(pinnedCount, maxPick)}` : `between 2 
       }
 
       const today = new Date().toDateString();
+      // Delta sweeps sharpen the follow-up framing further: the team exists
+      // to hunt CHANGES since the prior run, not to extend it.
       const followUpFraming = priorBlock
-        ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Diagnose the follow-up need itself — the gaps, open questions, and weak spots the directive targets. Sprout agents aimed squarely at what is missing or unresolved; do NOT field agents to re-cover ground the prior run already settled (unless the directive is to verify or challenge it).`
+        ? `\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are ESTABLISHED GROUND. Diagnose the follow-up need itself — the gaps, open questions, and weak spots the directive targets. Sprout agents aimed squarely at what is missing or unresolved; do NOT field agents to re-cover ground the prior run already settled (unless the directive is to verify or challenge it).${delta ? `\n${DELTA_ORCHESTRATOR_DIRECTIVE}` : ""}`
         : "";
       const prompt = `Today's date is ${today}.
 
@@ -1164,9 +1206,10 @@ Ensure the new agent is distinct and does not replicate the other existing agent
 
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
+      const delta = !!(priorContext && priorContext.delta);
       const priorBlock = formatPriorContextBlock(priorContext);
 
-      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}${fringe ? ", fringe" : ""}]`);
+      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1231,6 +1274,11 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 
       if (priorBlock) {
         prompt = `${prompt}\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are established context — do NOT re-derive or restate them at length. Your job is to EXTEND: chase your specific assignment, verify or challenge prior claims where your assignment demands it, and flag clearly anything you find that contradicts the prior report.`;
+        // Sentinel sweeps tighten the mandate further: deltas only, with
+        // explicit "no change detected" for stable ground.
+        if (delta) {
+          prompt = `${prompt}\n\n${DELTA_AGENT_RULES}`;
+        }
       }
       if (fringe) {
         prompt = `${prompt}\n\n${FRINGE_AGENT_RULES}`;
@@ -1303,8 +1351,9 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
+      const delta = !!(priorContext && priorContext.delta);
 
-      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}]`);
+      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1358,8 +1407,15 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 
       // The VEX and follow-up directives are numbered for the standard
       // structure; renumber their section headers to sit after the docket's
-      // seven sections in fringe mode.
-      const structureBody = fringe
+      // seven sections in fringe mode. Structure is picked by mode, and a
+      // sentinel delta sweep WINS over fringe: the sweep's product is the
+      // Delta Briefing regardless of the case's original mode. The delta
+      // branch deliberately drops followUpSectionDirective — sections 2-5 of
+      // the briefing ARE the follow-up integration, so appending it would
+      // duplicate the whole document's purpose.
+      const structureBody = delta
+        ? `${DELTA_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 7. Red Team Findings & Rebuttals")}`
+        : fringe
         ? `${FRINGE_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
         : `# ${topic}: Swarm Intelligence Synthesis
 
