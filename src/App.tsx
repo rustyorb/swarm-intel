@@ -44,6 +44,7 @@ import {
   FileDown,
   Printer,
   BookOpenText,
+  Network,
   LibraryBig,
   ShieldAlert,
   Eye,
@@ -57,10 +58,11 @@ import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
 import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
+import ClaimAtlas from "./components/ClaimAtlas";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import AgentLibrary from "./components/AgentLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
@@ -570,6 +572,8 @@ export default function App() {
 
   const [viewingCompletedAgent, setViewingCompletedAgent] = useState<Agent | null>(null);
   const [showReader, setShowReader] = useState(false);
+  const [showAtlas, setShowAtlas] = useState(false);
+  const [extractingAtlas, setExtractingAtlas] = useState(false);
   const [regeneratingAgentId, setRegeneratingAgentId] = useState<string | null>(null);
   const [nudgeTexts, setNudgeTexts] = useState<Record<string, string>>({});
   const [copied, setCopied] = useState(false);
@@ -718,6 +722,62 @@ export default function App() {
       win.onload = () => setTimeout(triggerPrint, 350);
     }
     addLog("SYSTEM", "Paper-ready print view opened. Choose \"Save as PDF\" to archive the dossier.", "system");
+  };
+
+  // Claim Atlas: lazily extract the evidence graph the first time it is
+  // opened, then persist it on the session (state + history, same as leads
+  // and critiques) so reopening — even from a restored session — is instant.
+  const handleOpenAtlas = async () => {
+    if (!session) return;
+    if (session.claimAtlas && session.claimAtlas.length > 0) {
+      setShowAtlas(true);
+      return;
+    }
+    if (extractingAtlas) return;
+
+    const reportsPayload = session.agents
+      .filter((a) => a.report)
+      .map((a) => ({ agentId: a.id, agentName: a.name, agentRole: a.role, report: a.report }));
+    if (reportsPayload.length === 0) {
+      addLog("SYSTEM", "ATLAS: no specialist reports on this session to extract claims from.", "warning");
+      return;
+    }
+
+    setExtractingAtlas(true);
+    addLog("SYSTEM", "ATLAS: mapping major claims to their supporting and disputing specialists...", "system");
+    try {
+      const response = await fetch("/api/research/extract-claims", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reports: reportsPayload,
+          synthesizedReport: session.synthesizedReport || "",
+          settings: settings,
+        }),
+      });
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => null);
+        throw new Error(errBody?.error || `Server responded with status ${response.status}`);
+      }
+      const data = await response.json();
+      const claims: AtlasClaim[] = Array.isArray(data.claims) ? data.claims : [];
+      if (claims.length === 0) {
+        throw new Error("Extraction returned no usable claims.");
+      }
+      const updated: ResearchSession = { ...session, claimAtlas: claims };
+      // Guard against the user switching sessions while extraction was in
+      // flight: only overwrite live state if it is still the same session.
+      // History is keyed by id, so saving there is safe either way.
+      setSession(prev => (prev && prev.id === updated.id ? updated : prev));
+      saveToHistory(updated);
+      addLog("SYSTEM", `ATLAS: ${claims.length} claim(s) mapped across ${reportsPayload.length} specialist report(s).`, "success");
+      setShowAtlas(true);
+    } catch (err: any) {
+      // Non-fatal: log and stay on the current view — retry is just another click.
+      addLog("SYSTEM", `ATLAS: claim extraction failed (${err.message}).`, "warning");
+    } finally {
+      setExtractingAtlas(false);
+    }
   };
 
   const handleApproveAndStartResearch = () => {
@@ -2693,6 +2753,14 @@ export default function App() {
                     <BookOpenText className="w-3.5 h-3.5" />
                   </button>
                   <button
+                    onClick={handleOpenAtlas}
+                    disabled={extractingAtlas}
+                    className="h-8 w-8 flex items-center justify-center bg-bg-primary border border-border-warm text-text-secondary hover:text-accent-warm rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={extractingAtlas ? "Extracting claims from the specialist reports..." : "Open the Claim Atlas — which specialists support or dispute each major claim"}
+                  >
+                    {extractingAtlas ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Network className="w-3.5 h-3.5" />}
+                  </button>
+                  <button
                     onClick={handlePrintDossier}
                     className="h-8 w-8 flex items-center justify-center bg-bg-primary border border-border-warm text-text-secondary hover:text-accent-warm rounded-lg transition-all cursor-pointer"
                     title="Open a paper-ready print / Save-as-PDF view of the full dossier"
@@ -3084,6 +3152,16 @@ export default function App() {
               : getAgentColorHex(session?.agents.find((a) => a.id === activeReportViewerId)?.colorTheme || "")
           }
           onClose={() => setShowReader(false)}
+        />
+      )}
+
+      {/* Claim Atlas evidence-graph overlay */}
+      {showAtlas && session?.claimAtlas && session.claimAtlas.length > 0 && (
+        <ClaimAtlas
+          session={session}
+          atlas={session.claimAtlas}
+          getAgentColorHex={getAgentColorHex}
+          onClose={() => setShowAtlas(false)}
         />
       )}
 
