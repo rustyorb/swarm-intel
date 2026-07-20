@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { MessagesSquare, Cpu, Send, ChevronDown, GitBranch, X } from "lucide-react";
+import { MessagesSquare, Cpu, Send, ChevronDown, GitBranch, X, Swords } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PixelAvatar from "./PixelAvatar";
@@ -19,6 +19,8 @@ const STARTERS = [
   "What are the highest-risk unknowns?",
   "What should be investigated next?",
 ];
+
+const WARROOM_HEX = "#ef4444";
 
 const markdownComponents = {
   h1: ({ node, ...props }: any) => <h1 className="text-lg font-bold text-text-primary mt-4 mb-2 font-display" {...props} />,
@@ -44,6 +46,11 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
   const [error, setError] = useState<{ id: string; text: string } | null>(null);
   const [showFollowUp, setShowFollowUp] = useState(false);
   const [followUpText, setFollowUpText] = useState("");
+
+  // War Room: specialists debate a contested question in turns.
+  const [warRoom, setWarRoom] = useState(false);
+  const [debaters, setDebaters] = useState<string[]>([]);
+  const [debateRounds, setDebateRounds] = useState(2);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -180,10 +187,152 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
     }
   };
 
+  const toggleWarRoom = () => {
+    setWarRoom((w) => {
+      const next = !w;
+      // Sensible default on first open: seat the first debaters (up to 4).
+      if (next && debaters.length < 2) {
+        setDebaters(respondents.slice(0, Math.min(4, respondents.length)).map((a) => a.id));
+      }
+      return next;
+    });
+  };
+
+  const toggleDebater = (id: string) => {
+    setDebaters((prev) =>
+      prev.includes(id) ? prev.filter((d) => d !== id) : prev.length >= 4 ? prev : [...prev, id]
+    );
+  };
+
+  // Drains an SSE response into onChunk; returns the accumulated text.
+  const drainStream = async (response: Response, onChunk: (full: string) => void): Promise<string> => {
+    const reader = response.body?.getReader();
+    if (!reader) return "";
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex;
+      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+        const lineText = buffer.slice(0, newlineIndex).trim();
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!lineText.startsWith("data: ")) continue;
+        let data: any = null;
+        try {
+          data = JSON.parse(lineText.slice(6));
+        } catch (e) {
+          // Ignore partial/ping parse errors
+        }
+        if (!data) continue;
+        if (data.type === "chunk" && data.text) {
+          text += data.text;
+          onChunk(text);
+        } else if (data.type === "error") {
+          throw new Error(data.error || "Stream error.");
+        }
+      }
+    }
+    return text;
+  };
+
+  // Run a full debate: each seated specialist speaks once per round, in turn,
+  // rebutting the floor. Turns stream into the chat as ordinary messages.
+  const runDebate = async (rawQuestion: string) => {
+    const question = rawQuestion.trim();
+    if (!question || isStreaming) return;
+    const participants = respondents.filter((a) => debaters.includes(a.id));
+    if (participants.length < 2) return;
+
+    const stamp = Date.now();
+    const userMsg: ChatMessage = {
+      id: `msg-${stamp}-u`,
+      role: "user",
+      respondent: "war-room",
+      respondentName: "War Room",
+      content: question,
+      timestamp: new Date().toLocaleTimeString(),
+    };
+    let chat = [...(session.chat ?? []), userMsg];
+    let workingSession: ResearchSession = { ...session, chat };
+    onPersist(workingSession);
+    setInput("");
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
+    setError(null);
+    setIsStreaming(true);
+
+    const transcript: { speaker: string; content: string }[] = [{ speaker: "MODERATOR", content: question }];
+    let lastTurnId = userMsg.id;
+
+    try {
+      for (let round = 1; round <= debateRounds; round++) {
+        for (const agent of participants) {
+          const turnId = `msg-${Date.now()}-${agent.id}`;
+          lastTurnId = turnId;
+          const turnMsg: ChatMessage = {
+            id: turnId,
+            role: "assistant",
+            respondent: agent.id,
+            respondentName: agent.name,
+            respondentColor: agent.colorTheme,
+            content: "",
+            timestamp: new Date().toLocaleTimeString(),
+          };
+          chat = [...chat, turnMsg];
+          workingSession = { ...workingSession, chat };
+          onPersist(workingSession);
+          setStreaming({ id: turnId, content: "" });
+
+          const response = await fetch("/api/research/debate-turn-stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              topic: session.topic,
+              question,
+              speaker: { id: agent.id, name: agent.name, role: agent.role, investigativeAngle: agent.investigativeAngle, report: agent.report },
+              opponents: participants.filter((p) => p.id !== agent.id).map((p) => ({ name: p.name, role: p.role })),
+              synthesizedReport: session.synthesizedReport || "",
+              transcript,
+              settings,
+              round,
+              totalRounds: debateRounds,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorBody = await response.json().catch(() => null);
+            throw new Error(errorBody?.error || `${agent.name} could not take the floor.`);
+          }
+
+          const turnText = await drainStream(response, (full) => setStreaming({ id: turnId, content: full }));
+          if (!turnText.trim()) {
+            throw new Error(`${agent.name} yielded the floor (empty turn).`);
+          }
+
+          transcript.push({ speaker: `${agent.name} (${agent.role})`, content: turnText });
+          chat = chat.map((m) => (m.id === turnId ? { ...m, content: turnText } : m));
+          workingSession = { ...workingSession, chat };
+          onPersist(workingSession);
+        }
+      }
+      setStreaming(null);
+      setIsStreaming(false);
+    } catch (err: any) {
+      onPersist(workingSession);
+      setStreaming(null);
+      setIsStreaming(false);
+      setError({ id: lastTurnId, text: err.message || "The debate collapsed." });
+    }
+  };
+
+  const submit = (raw: string) => (warRoom ? runDebate(raw) : send(raw));
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send(input);
+      submit(input);
     }
   };
 
@@ -329,23 +478,78 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
             </div>
           )}
 
-          <div className="flex items-center gap-2 mb-2.5">
-            <span className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted">Direct question to</span>
-            <div className="relative flex items-center">
-              <span className="w-2 h-2 rounded-full absolute left-3 pointer-events-none" style={{ backgroundColor: currentColor }} />
-              <select
-                value={respondent}
-                onChange={(e) => setRespondent(e.target.value)}
+          <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+            {warRoom ? (
+              <>
+                <span className="text-[9px] font-mono uppercase tracking-widest font-bold" style={{ color: WARROOM_HEX }}>
+                  Debaters ({debaters.length}/4)
+                </span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {respondents.map((a) => {
+                    const seated = debaters.includes(a.id);
+                    const hex = getAgentColorHex(a.colorTheme);
+                    return (
+                      <button
+                        key={a.id}
+                        onClick={() => toggleDebater(a.id)}
+                        disabled={isStreaming}
+                        className="text-[10px] font-mono font-bold px-2 py-1 rounded-lg border transition-all cursor-pointer disabled:opacity-50"
+                        style={seated
+                          ? { color: hex, borderColor: `${hex}88`, background: `${hex}1a` }
+                          : { color: "var(--color-text-muted, #8a8a8a)", borderColor: "transparent" }}
+                        title={`${a.name} — ${a.role}`}
+                      >
+                        {a.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <select
+                  value={debateRounds}
+                  onChange={(e) => setDebateRounds(Number(e.target.value))}
+                  disabled={isStreaming}
+                  className="appearance-none bg-bg-primary border border-border-warm rounded-lg px-2 py-1.5 text-[10px] font-mono text-text-secondary focus:outline-none disabled:opacity-50 cursor-pointer"
+                  title="Rounds — each debater speaks once per round"
+                >
+                  <option value={1}>1 round</option>
+                  <option value={2}>2 rounds</option>
+                  <option value={3}>3 rounds</option>
+                </select>
+              </>
+            ) : (
+              <>
+                <span className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted">Direct question to</span>
+                <div className="relative flex items-center">
+                  <span className="w-2 h-2 rounded-full absolute left-3 pointer-events-none" style={{ backgroundColor: currentColor }} />
+                  <select
+                    value={respondent}
+                    onChange={(e) => setRespondent(e.target.value)}
+                    disabled={isStreaming}
+                    className="appearance-none bg-bg-primary border border-border-warm rounded-lg pl-7 pr-8 py-1.5 text-[11px] font-mono text-text-secondary focus:outline-none focus:border-accent-warm/50 disabled:opacity-50 cursor-pointer"
+                  >
+                    <option value="panel">Full Panel</option>
+                    {respondents.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name} — {a.role}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="w-3 h-3 text-text-muted absolute right-2.5 pointer-events-none" />
+                </div>
+              </>
+            )}
+            {respondents.length >= 2 && (
+              <button
+                onClick={toggleWarRoom}
                 disabled={isStreaming}
-                className="appearance-none bg-bg-primary border border-border-warm rounded-lg pl-7 pr-8 py-1.5 text-[11px] font-mono text-text-secondary focus:outline-none focus:border-accent-warm/50 disabled:opacity-50 cursor-pointer"
+                className="h-7 px-3 border text-[9px] font-mono font-bold rounded-lg uppercase tracking-widest transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                style={warRoom
+                  ? { color: WARROOM_HEX, borderColor: `${WARROOM_HEX}88`, background: `${WARROOM_HEX}1a` }
+                  : { color: "var(--color-text-muted, #8a8a8a)", borderColor: "var(--color-border-warm, #3a3a3a)" }}
+                title="War Room — seated specialists debate a contested question in turns, grounded in their own reports"
               >
-                <option value="panel">Full Panel</option>
-                {respondents.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name} — {a.role}</option>
-                ))}
-              </select>
-              <ChevronDown className="w-3 h-3 text-text-muted absolute right-2.5 pointer-events-none" />
-            </div>
+                <Swords className="w-3 h-3" />
+                War Room
+              </button>
+            )}
             {onLaunchFollowUp && !showFollowUp && (
               <button
                 onClick={() => setShowFollowUp(true)}
@@ -365,12 +569,14 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
               onKeyDown={handleKeyDown}
               disabled={isStreaming}
               rows={1}
-              placeholder={isStreaming ? "The swarm is responding…" : "Interrogate the swarm… (Enter to send, Shift+Enter for newline)"}
+              placeholder={isStreaming
+                ? (warRoom ? "The floor is in session…" : "The swarm is responding…")
+                : (warRoom ? "Pose the contested question to the floor… (Enter to open the debate)" : "Interrogate the swarm… (Enter to send, Shift+Enter for newline)")}
               className="flex-1 resize-none bg-bg-primary border border-border-warm rounded-xl px-4 py-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-warm/50 disabled:opacity-60 max-h-40"
             />
             <button
-              onClick={() => send(input)}
-              disabled={isStreaming || !input.trim()}
+              onClick={() => submit(input)}
+              disabled={isStreaming || !input.trim() || (warRoom && debaters.length < 2)}
               className="h-11 w-11 flex items-center justify-center bg-accent-warm hover:bg-accent-hi-warm text-black rounded-xl transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
               title="Send"
             >

@@ -1598,6 +1598,97 @@ RESPONSE REQUIREMENTS:
     }
   });
 
+  // 5. War Room Endpoint - one debate turn: a specialist argues the contested
+  // question in persona, rebutting the latest points on the floor, grounded
+  // strictly in their own report + the synthesis. The client runs the round
+  // loop and streams each turn into the Interrogation Room chat.
+  app.post("/api/research/debate-turn-stream", async (req, res) => {
+    try {
+      const { topic, question, speaker, opponents, synthesizedReport, transcript, settings, round, totalRounds } = req.body;
+
+      if (!question || typeof question !== "string" || !question.trim()) {
+        return res.status(400).json({ error: "A non-empty contested question is required." });
+      }
+      if (!speaker || !speaker.name) {
+        return res.status(400).json({ error: "A speaker agent is required." });
+      }
+
+      console.log(`War Room turn: ${speaker.name} (round ${round}/${totalRounds}) on "${question.slice(0, 80)}"`);
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+      res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+
+      const opponentList = Array.isArray(opponents) && opponents.length
+        ? opponents.map((o: any) => `${o.name} (${o.role})`).join(", ")
+        : "the other specialists";
+
+      const transcriptBlock = Array.isArray(transcript) && transcript.length
+        ? transcript
+            .slice(-12)
+            .map((t: any) => `${t.speaker || "MODERATOR"}: ${String(t.content || "").slice(0, 1500)}`)
+            .join("\n\n")
+        : "(you are opening the debate)";
+
+      const isFinalRound = Number(round) >= Number(totalRounds);
+
+      const systemInstruction = `You are ${speaker.name}, an expert ${speaker.role}, debating fellow specialists in the War Room. You argue YOUR evidence-based position with conviction and intellectual honesty: you rebut specifics, concede weak points plainly, and never invent facts beyond the intelligence you gathered.`;
+
+      const prompt = `TOPIC: "${topic}"
+
+CONTESTED QUESTION ON THE FLOOR: "${question}"
+
+You are debating: ${opponentList}. The moderator (the user) may interject — address moderator points directly when they appear.
+
+YOUR OWN FULL REPORT (your authoritative evidence base):
+${String(speaker.report || "(no report on file)").slice(0, 14000)}
+
+CONSOLIDATED SYNTHESIS (shared context):
+${String(synthesizedReport || "(none)").slice(0, 4000)}
+
+DEBATE TRANSCRIPT SO FAR:
+${transcriptBlock}
+
+THIS IS ROUND ${round} OF ${totalRounds}. Deliver your next debate turn:
+- Speak in the FIRST PERSON as ${speaker.name}, in your own expert voice. This is a live exchange, not a report — direct, pointed, conversational.
+- REBUT the most recent opposing points BY NAME: quote or paraphrase the specific claim you are challenging, then counter it with specific evidence from YOUR report.
+- Advance your own strongest point that has not yet been made on the floor.
+- Concede honestly where an opponent's evidence beats yours — then explain what that concession does and does not change.
+- Ground everything strictly in your report and the synthesis. No new outside facts.
+- Keep it tight: 200-350 words.${isFinalRound ? `\n- This is the FINAL round: end with a one-line sharpened stance, formatted exactly as "**Position:** <single sentence>".` : ""}`;
+
+      const pingInterval = setInterval(() => {
+        res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
+      }, 5000);
+
+      try {
+        await runUniversalStream(
+          "agent",
+          settings,
+          prompt,
+          systemInstruction,
+          false,
+          (text: string) => {
+            res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
+          }
+        );
+
+        clearInterval(pingInterval);
+        res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+        res.end();
+      } catch (error: any) {
+        clearInterval(pingInterval);
+        throw error;
+      }
+    } catch (error: any) {
+      console.error("Error in /api/research/debate-turn-stream:", error);
+      res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Debate turn failed." })}\n\n`);
+      res.end();
+    }
+  });
+
   // Vite middleware / client routing setup
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
