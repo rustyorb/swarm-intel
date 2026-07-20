@@ -19,6 +19,18 @@ export interface SwarmConfig {
   agentCount: number | "auto";
   depth: "recon" | "standard" | "deep";
   redTeam?: boolean;
+  // Case-file mode for edge/esoteric/heterodox territory: investigation-native
+  // personas, non-mainstream sourcing, Evidence Docket synthesis, open leads.
+  fringeMode?: boolean;
+}
+
+// A followable investigative thread from a fringe-mode Evidence Docket. The
+// case accumulates across follow-up commissions: leads open here are worked
+// or closed by later swarms.
+export interface Lead {
+  id: string;
+  text: string;
+  status: "open" | "worked" | "dead-end";
 }
 
 export interface RedTeamCritique {
@@ -39,6 +51,8 @@ export interface PriorContext {
   synthesis: string;
   // Recent interrogation-room exchanges that motivated the follow-up.
   chatExcerpt: string;
+  // Open leads carried from the parent case file (fringe mode).
+  leads?: Lead[];
 }
 
 export interface ChatMessage {
@@ -67,6 +81,8 @@ export interface ResearchSession {
   config?: SwarmConfig;
   critiques?: RedTeamCritique[];
   chat?: ChatMessage[];
+  // Fringe-mode case file: leads extracted from the synthesis docket.
+  leads?: Lead[];
   favorite?: boolean;
   tags?: string[];
   label?: string;

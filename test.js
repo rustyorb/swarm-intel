@@ -4,7 +4,7 @@ const data = JSON.stringify({ topic: "Space" });
 
 const options = {
   hostname: 'localhost',
-  port: 3000,
+  port: 3369,
   path: '/api/research/initiate',
   method: 'POST',
   headers: {

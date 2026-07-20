@@ -330,14 +330,66 @@ function formatPriorContextBlock(priorContext: any): string {
   const parentTopic = String(priorContext.parentTopic || "").trim();
   if (!synthesis && !directive) return "";
 
+  // Fringe case files carry their unworked leads forward so follow-up swarms
+  // work the case instead of restarting it.
+  const openLeads = Array.isArray(priorContext.leads)
+    ? priorContext.leads.filter((l: any) => l && l.status === "open" && typeof l.text === "string")
+    : [];
+  const leadsBlock = openLeads.length
+    ? `\nOPEN LEADS ON FILE (unworked threads from the prior investigation — prioritize these):\n${openLeads.map((l: any) => `- [${l.id}] ${l.text}`).join("\n")}\n`
+    : "";
+
   return `PRIOR INVESTIGATION CONTEXT (this is a FOLLOW-UP run — an earlier swarm already researched the topic below):
 ORIGINAL TOPIC: "${parentTopic}"
 
 PRIOR SYNTHESIZED FINDINGS (condensed — treat as established ground):
 ${synthesis || "(no synthesis on file)"}
-${chatExcerpt ? `\nINTERROGATION EXCHANGES THAT MOTIVATED THIS FOLLOW-UP:\n${chatExcerpt}\n` : ""}
+${chatExcerpt ? `\nINTERROGATION EXCHANGES THAT MOTIVATED THIS FOLLOW-UP:\n${chatExcerpt}\n` : ""}${leadsBlock}
 FOLLOW-UP DIRECTIVE FROM THE USER: "${directive}"`;
 }
+
+// -------------------------------------------------------------
+// Fringe Mode — case-file investigation prompt blocks
+// -------------------------------------------------------------
+// The toggle flips the pipeline from verdict-oriented reporting to evidence
+// accumulation: investigation-native personas, non-mainstream sourcing,
+// provenance tagging, and an Evidence Docket synthesis that may legitimately
+// conclude "insufficient to conclude".
+
+const FRINGE_ORCHESTRATOR_HINT = `
+FRINGE MODE — CASE FILE INVESTIGATION: This topic sits on the edges of mainstream coverage (fringe, esoteric, anomalous, heterodox, or frontier territory). Frame your mission analysis as OPENING A CASE FILE: what is actually claimed or reported, what evidence could exist, where that evidence would live, and what would move the case forward. Sprout investigation-native specialists fitted to this exact territory — examples of the species: an archives/FOIA hound for declassified and official records, an insider-practitioner fluent in the community's own literature, a historian of the subject's lineage, an anomaly cataloguer who inventories documented incidents, a lore cartographer mapping claims to their original sources, a frontier-lab watcher for research edges. Derive the team from the topic; do not force these examples. Do NOT field a mainstream-consensus gatekeeper persona ("the debunker") — in a case file, rigor lives in provenance, not dismissal.`;
+
+const FRINGE_AGENT_RULES = `FRINGE INVESTIGATION RULES (mandatory — you are working a CASE FILE, not writing a verdict):
+- Investigations accumulate. Collect and catalog evidence; do NOT close the case because early evidence is thin. A detective does not find the first clue and declare the crime never happened.
+- Document the territory ON ITS OWN TERMS: map the claims, incidents, lineages, key figures, and internal logic faithfully. Do not pad the report with reflexive "however, experts dismiss this" hedging — skepticism belongs in provenance, not editorializing.
+- PROVENANCE-TAG every major claim with one of: [primary text], [community lore], [witness testimony], [documented anomaly], [official record], [verified]. Let the tags do the epistemics.
+- HUNT NON-MAINSTREAM SOURCES: archives and special collections (archive.org and national archives), declassified/FOIA reading rooms, court records, patent filings, out-of-print books and scans, preprints, niche journals, practitioner forums and communities, original-era newspapers. Mainstream summaries are a starting point, never the destination.
+- End your report with an '## Open Leads' section listing 3-6 SPECIFIC, followable threads (a named archive to pull, a person to trace, a document to locate, a claim to cross-check) — never vague "more research needed" filler.`;
+
+const FRINGE_SYNTHESIS_STRUCTURE = (topic: string) => `# ${topic}: Evidence Docket — Case File Synthesis
+
+## 1. Case Status
+- Open with exactly one status: EVIDENCE ACCUMULATING, THREADS CONVERGING, ACCOUNTS CONTESTED, or CASE COLD — followed by a short justification.
+- "Insufficient to conclude" is a valid, respectable finding. Do NOT force a verdict the evidence cannot carry.
+
+## 2. Case Overview
+- What is claimed or reported, the scope of this investigation, and the specialist angles fielded.
+
+## 3. Evidence Catalog
+- The material gathered, organized by theme. PRESERVE the specialists' provenance tags ([primary text], [witness testimony], [official record], etc.) and citations.
+
+## 4. Converging Threads
+- Where independent lines of evidence point the same direction — the strongest patterns in the file.
+
+## 5. Contradictions & Contested Ground
+- Where accounts conflict, where evidence undercuts claims, and what remains genuinely unresolved.
+
+## 6. Open Leads
+- Consolidate and deduplicate the specialists' open leads into a prioritized list.
+- Format each as: "LEAD: <the specific followable thread> — WHY: <what it could resolve>".
+
+## 7. Case Notes
+- Closing observations: the overall quality of the file, collection gaps, and what the next commission should target.`;
 
 async function generateUnifiedJSON(
   taskRole: "orchestrator" | "agent" | "synthesis",
@@ -734,6 +786,7 @@ async function startServer() {
       const rawCount = config ? config.agentCount : "auto";
       const pinnedCount = typeof rawCount === "number" ? Math.max(3, Math.min(9, Math.round(rawCount))) : null;
       const depth = config && config.depth ? config.depth : "standard";
+      const fringe = !!(config && config.fringeMode);
 
       let depthHint = "";
       if (depth === "recon") {
@@ -742,7 +795,7 @@ async function startServer() {
         depthHint = "\nDEPTH MODE — DEEP: Make each agent's assignment maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
       }
 
-      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
+      console.log(`Assembling ${priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
 
       const today = new Date().toDateString();
       const followUpFraming = priorBlock
@@ -765,9 +818,11 @@ PHASE 2 — SPROUT THE TEAM FROM THE ANALYSIS:
 Design ${pinnedCount ? `exactly ${pinnedCount}` : "between 3 and 9 (your call — exactly as many as the need demands, no padding)"} specialist research agents, each derived directly from a requirement identified in Phase 1.
 - Every agent must map to a concrete requirement of THIS request. Do NOT apply a stock template of perspectives (technical / socioeconomic / historical / ethical / futuristic) unless your analysis shows that angle is genuinely needed here.
 - If the need is narrow, prefer a small team of tightly targeted agents over generic filler roles.
-- Give each agent a unique creative persona name, a specialty title a real expert in this exact problem space would hold, a specific investigative assignment stating what they must find out and which kinds of sources or evidence to chase, and a theme color.${depthHint}`;
+- Give each agent a unique creative persona name, a specialty title a real expert in this exact problem space would hold, a specific investigative assignment stating what they must find out and which kinds of sources or evidence to chase, and a theme color.${depthHint}${fringe ? `\n${FRINGE_ORCHESTRATOR_HINT}` : ""}`;
 
-      const systemInstruction = "You are an elite Research Swarm Orchestrator. You first diagnose what a research request truly needs, then assemble a bespoke team of specialist digital persona agents shaped entirely by that diagnosis — never by a fixed template of roles.";
+      const systemInstruction = fringe
+        ? "You are an elite Research Swarm Orchestrator running in FRINGE case-file mode. You diagnose what an edge-territory investigation truly needs — treating the subject as a case to be worked, not a claim to be adjudicated — then assemble a bespoke team of investigation-native specialist personas shaped entirely by that diagnosis."
+        : "You are an elite Research Swarm Orchestrator. You first diagnose what a research request truly needs, then assemble a bespoke team of specialist digital persona agents shaped entirely by that diagnosis — never by a fixed template of roles.";
 
       const responseSchema = {
         type: Type.OBJECT,
@@ -984,9 +1039,10 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       }
 
       const depth = config && config.depth ? config.depth : "standard";
+      const fringe = !!(config && config.fringeMode);
       const priorBlock = formatPriorContextBlock(priorContext);
 
-      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}]`);
+      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}${fringe ? ", fringe" : ""}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1052,16 +1108,30 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
       if (priorBlock) {
         prompt = `${prompt}\n\n${priorBlock}\n\nFOLLOW-UP RULES: The prior findings above are established context — do NOT re-derive or restate them at length. Your job is to EXTEND: chase your specific assignment, verify or challenge prior claims where your assignment demands it, and flag clearly anything you find that contradicts the prior report.`;
       }
+      if (fringe) {
+        prompt = `${prompt}\n\n${FRINGE_AGENT_RULES}`;
+      }
       prompt = `${datePreamble}\n\n${prompt}\n\n${citationRules}`;
 
       // Queries for the injected-grounding fallback (providers without native
       // web search); native-search providers run their own queries instead.
+      // Fringe mode biases the sweep toward archives, declassified records,
+      // and practitioner communities alongside a mainstream baseline query.
       const currentYear = new Date().getFullYear();
-      const searchQueries = [
-        String(topic).slice(0, 220),
-        String(agent.investigativeAngle || "").slice(0, 220),
-        `${String(topic).slice(0, 160)} latest ${currentYear}`,
-      ].filter((q) => q.trim().length > 0);
+      const shortTopic = String(topic).slice(0, 160);
+      const searchQueries = fringe
+        ? [
+            String(topic).slice(0, 220),
+            String(agent.investigativeAngle || "").slice(0, 220),
+            `${shortTopic} site:archive.org`,
+            `${shortTopic} declassified FOIA documents`,
+            `${shortTopic} forum discussion firsthand account`,
+          ].filter((q) => q.trim().length > 0)
+        : [
+            String(topic).slice(0, 220),
+            String(agent.investigativeAngle || "").slice(0, 220),
+            `${shortTopic} latest ${currentYear}`,
+          ].filter((q) => q.trim().length > 0);
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
@@ -1108,8 +1178,9 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
       const priorBlock = formatPriorContextBlock(priorContext);
 
       const depth = config && config.depth ? config.depth : "standard";
+      const fringe = !!(config && config.fringeMode);
 
-      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}]`);
+      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1161,15 +1232,12 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 - Where new findings contradict the prior report, say so plainly and state which conclusion should now be trusted and why.`
         : "";
 
-      const prompt = `OVERARCHING TOPIC: "${topic}"
-
-You are the Lead Swarm Orchestrator. Your mission is to synthesize the following expert investigative reports into a single, comprehensive, publication-grade analytical document.
-
-SPECIALIST REPORTS:
-${reportsContext}${critiquesBlock}${followUpContextBlock}
-
-REQUIRED OUTPUT STRUCTURE:
-# ${topic}: Swarm Intelligence Synthesis
+      // The VEX and follow-up directives are numbered for the standard
+      // structure; renumber their section headers to sit after the docket's
+      // seven sections in fringe mode.
+      const structureBody = fringe
+        ? `${FRINGE_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
+        : `# ${topic}: Swarm Intelligence Synthesis
 
 ## 1. Executive Summary
 - High-level distillation of core discoveries.
@@ -1194,10 +1262,24 @@ REQUIRED OUTPUT STRUCTURE:
 - Actionable steps or logical consequences.
 
 ## 6. Synthesis Conclusion
-- Final summarizing statement.
+- Final summarizing statement.`;
+
+      const prompt = `OVERARCHING TOPIC: "${topic}"
+
+You are the Lead Swarm Orchestrator. ${fringe
+        ? "Your mission is to consolidate the following case-file investigations into a single Evidence Docket. This is an accumulating investigation, not an adjudication: your job is to organize the file, surface its patterns, and keep the case honest — not to force a verdict."
+        : "Your mission is to synthesize the following expert investigative reports into a single, comprehensive, publication-grade analytical document."}
+
+SPECIALIST REPORTS:
+${reportsContext}${critiquesBlock}${followUpContextBlock}
+
+REQUIRED OUTPUT STRUCTURE:
+${structureBody}
 
 STYLE GUIDELINES:
-- Tone: Academic, rigorous, insightful, and authoritative.
+${fringe
+        ? "- Tone: Investigative, meticulous, non-dismissive. Rigor lives in provenance tags and specificity, not editorial distance."
+        : "- Tone: Academic, rigorous, insightful, and authoritative."}
 - Depth: Be extremely detailed. Retain the technical nuances from the specialist reports.
 - Flow: Ensure a smooth narrative transition between sections.
 - Markdown: Use clean, standard Markdown.${depthDirective}`;
@@ -1235,15 +1317,85 @@ STYLE GUIDELINES:
     }
   });
 
+  // 3.4. Lead Extraction Endpoint (fringe mode) — pulls the Open Leads out of
+  // an Evidence Docket as structured data, and updates the status of leads
+  // carried in from a parent case (open → worked / dead-end) based on what
+  // this run's docket says about them.
+  app.post("/api/research/extract-leads", async (req, res) => {
+    try {
+      const { synthesis, priorLeads, settings } = req.body;
+      if (!synthesis || typeof synthesis !== "string" || !synthesis.trim()) {
+        return res.status(400).json({ error: "A non-empty synthesis document is required." });
+      }
+      const carried = Array.isArray(priorLeads)
+        ? priorLeads.filter((l: any) => l && typeof l.text === "string")
+        : [];
+
+      console.log(`Extracting case-file leads from docket (${synthesis.length} chars, ${carried.length} carried leads)`);
+
+      const carriedBlock = carried.length
+        ? `\nLEADS CARRIED FROM THE PARENT CASE (re-emit every one of these with its id, updating status where this docket shows it was worked or hit a dead end):\n${carried.map((l: any) => `- id "${l.id}" [${l.status || "open"}]: ${l.text}`).join("\n")}\n`
+        : "";
+
+      const prompt = `EVIDENCE DOCKET:
+${synthesis.slice(0, 30000)}
+${carriedBlock}
+Extract the case file's leads as structured data:
+1. Every lead in the docket's "Open Leads" section becomes a lead with status "open". Keep each lead's text specific and followable (the LEAD + WHY content, condensed to one sentence or two).
+2. Every carried lead listed above must be re-emitted with its ORIGINAL id. Set its status to "worked" if this docket shows the thread was pursued and yielded findings, "dead-end" if pursued and exhausted, otherwise keep "open".
+3. New leads get ids "lead-<n>" continuing after the highest carried number (or starting at lead-1).
+Return 3-12 leads total.`;
+
+      const systemInstruction = "You are a case-file clerk for an investigative research swarm. You extract and maintain the ledger of investigative leads with precision, preserving ids and judging lead status strictly from what the docket states.";
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          leads: {
+            type: Type.ARRAY,
+            description: "The full updated lead ledger for this case.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING, description: "Stable lead id, e.g. lead-3. Carried leads keep their original id." },
+                text: { type: Type.STRING, description: "The specific, followable thread (1-2 sentences)." },
+                status: { type: Type.STRING, description: "One of: open, worked, dead-end" },
+              },
+              required: ["id", "text", "status"],
+            },
+          },
+        },
+        required: ["leads"],
+      };
+
+      const result = await generateUnifiedJSON("orchestrator", settings, prompt, systemInstruction, responseSchema);
+      const rawLeads = Array.isArray(result?.leads) ? result.leads : Array.isArray(result) ? result : [];
+      const cleanLeads = rawLeads
+        .filter((l: any) => l && typeof l.text === "string" && l.text.trim())
+        .slice(0, 20)
+        .map((l: any, idx: number) => ({
+          id: typeof l.id === "string" && l.id.trim() ? l.id.trim() : `lead-${idx + 1}`,
+          text: l.text.trim(),
+          status: ["open", "worked", "dead-end"].includes(l.status) ? l.status : "open",
+        }));
+
+      res.json({ leads: cleanLeads });
+    } catch (error: any) {
+      console.error("Error in /api/research/extract-leads:", error);
+      res.status(500).json({ error: error.message || "Failed to extract case leads." });
+    }
+  });
+
   // 3.5. Red Team Endpoint - VEX adversarially cross-examines a single specialist report via SSE
   app.post("/api/research/redteam-stream", async (req, res) => {
     try {
-      const { topic, agent, report, settings } = req.body;
+      const { topic, agent, report, settings, config } = req.body;
       if (!topic || !agent || !report) {
         return res.status(400).json({ error: "Topic, agent, and report are required for a red team review." });
       }
+      const fringe = !!(config && config.fringeMode);
 
-      console.log(`Red Team cross-examination: VEX vs ${agent.name} (${agent.role}) for topic: "${topic}"`);
+      console.log(`Red Team cross-examination: VEX vs ${agent.name} (${agent.role}) for topic: "${topic}"${fringe ? " [fringe: case audit]" : ""}`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1251,9 +1403,35 @@ STYLE GUIDELINES:
       res.flushHeaders();
       res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
 
-      const systemInstruction = "You are VEX, Chief Adversarial Officer — a ruthless, brilliant red-team analyst. You exist to stress-test intelligence, never to flatter it. You are sharp, specific, and unsparing, but intellectually honest: your objective is to make the final synthesis stronger by exposing every weakness in the specialist's work.";
+      const systemInstruction = fringe
+        ? "You are VEX, Case Auditor — a meticulous, unsparing evidence-integrity examiner. In fringe case-file mode you audit the FILE, never the subject: your job is chain-of-custody rigor — provenance, contamination, and load-bearing weak points — not topic-level debunking. You never dismiss a subject as inherently unworthy of investigation; you expose exactly how solid each piece of evidence handling actually is."
+        : "You are VEX, Chief Adversarial Officer — a ruthless, brilliant red-team analyst. You exist to stress-test intelligence, never to flatter it. You are sharp, specific, and unsparing, but intellectually honest: your objective is to make the final synthesis stronger by exposing every weakness in the specialist's work.";
 
-      const prompt = `OVERARCHING TOPIC: "${topic}"
+      const prompt = fringe
+        ? `OVERARCHING TOPIC: "${topic}"
+
+You are auditing a case-file report submitted by ${agent.name}, a ${agent.role}.
+Their assigned investigative angle was: "${agent.investigativeAngle || "n/a"}".
+
+CASE-FILE REPORT UNDER AUDIT:
+${report}
+
+Conduct a rigorous evidence audit of this report. Audit the FILE, not the subject — never argue the topic is unworthy of investigation. Be sharp and specific — cite the report's OWN claims and provenance tags when you challenge them. Structure your audit in Markdown with EXACTLY these four sections:
+
+## 1. Provenance & Chain of Custody
+Identify claims whose provenance tags overstate their sourcing, citations that do not trace to a locatable source, and secondhand material presented as primary.
+
+## 2. Circular Citation & Contamination
+Identify lore citing lore, witness accounts plausibly shaped by prior publications, and single origin points masquerading as multiple independent sources.
+
+## 3. Load-Bearing Weak Points
+Identify which specific pieces of evidence the report's overall picture depends on most, assess how solid each actually is, and note any mundane alternative explanations that the file ITSELF suggests.
+
+## 4. Confidence Verdict
+State an overall file-integrity verdict of exactly HIGH, MEDIUM, or LOW, followed by a single-sentence justification. Use this exact format: "**Verdict: MEDIUM** — <one-line justification>".
+
+Keep the whole audit tight and high-signal: roughly 400-700 words. Write as VEX, in the first person, with the tone of a scrupulous case supervisor.`
+        : `OVERARCHING TOPIC: "${topic}"
 
 You are cross-examining a specialist report submitted by ${agent.name}, a ${agent.role}.
 Their assigned investigative angle was: "${agent.investigativeAngle || "n/a"}".

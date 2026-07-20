@@ -29,6 +29,7 @@ You give Swarm Intel a research topic. An **orchestrator** model first diagnoses
 - 🌐 **Real web grounding on every provider** — Gemini, Anthropic, OpenRouter, and Venice use their native web search; LM Studio, Ollama, and plain OpenAI get live SearXNG results injected server-side (set `SEARXNG_BASE_URL` in `.env`). The ops log reports each agent's grounding mode, and warns when a run had no live data.
 - 🔁 **Follow-up commissions** — from the Interrogation Room, launch a follow-up swarm that carries the prior run's synthesis and chat as established context. The new team targets the gaps instead of re-covering old ground, and its synthesis states what it adds, confirms, or overturns versus the prior report.
 - 🛡️ **Red Team round** — optional adversarial pass where VEX cross-examines every report, and the synthesis must rebut or concede each critique.
+- 👁️ **Fringe Mode** — case-file investigation for edge/esoteric territory: investigation-native specialists (FOIA hounds, insider-practitioners, anomaly cataloguers), non-mainstream sourcing (archives, declassified records, practitioner communities), provenance-tagged claims, and an Evidence Docket synthesis that keeps the case open — with structured Open Leads that follow-up commissions work like a real investigation. VEX becomes a chain-of-custody case auditor instead of a debunker.
 - 💬 **Interrogation Room** — chat with the completed swarm, grounded strictly in its reports, panel-wide or specialist-in-persona.
 - 📦 **Dossier Export Suite** — standalone HTML dossier, print-to-PDF paper theme, and a full-screen Reader Mode with auto-TOC.
 - 🗂️ **Knowledge Library** — a searchable, taggable archive of up to 50 swarms with favorites, rename, and JSON backup/restore.
@@ -166,15 +167,15 @@ cp .env.example .env
 npm run dev
 ```
 
-Open **http://localhost:3000** and enter a research topic.
+Open **http://localhost:3369** and enter a research topic. (The server starts probing at port 3369 — chosen to stay clear of common dev/Docker squatters on 3000 — and walks upward if it's taken; the console prints the final URL. Override with `PORT` in `.env`.)
 
-> The server binds to `0.0.0.0:3000`, so it is reachable from other devices on your LAN. Keep that in mind since your provider keys are proxied through it.
+> The server binds to `0.0.0.0`, so it is reachable from other devices on your LAN. Keep that in mind since your provider keys are proxied through it.
 
 ### Scripts
 
 | Script | Command | Purpose |
 | --- | --- | --- |
-| `npm run dev` | `tsx server.ts` | Run Express with Vite in middleware mode (hot reload) on port 3000. |
+| `npm run dev` | `tsx server.ts` | Run Express with Vite in middleware mode (hot reload) on port 3369+. |
 | `npm run build` | `vite build` + `esbuild` | Bundle the SPA and compile the server to `dist/server.cjs`. |
 | `npm start` | `node dist/server.cjs` | Serve the production build (set `NODE_ENV=production`). |
 | `npm run lint` | `tsc --noEmit` | Type-check the whole project. |
@@ -210,7 +211,7 @@ A common setup is a fast, cheap model for the orchestrator and a stronger model 
 
 ## 🛰️ API Reference
 
-All routes are served by `server.ts` on port 3000.
+All routes are served by `server.ts` on port 3369 (or the next free port above it).
 
 | Method | Path | Purpose | Response |
 | --- | --- | --- | --- |

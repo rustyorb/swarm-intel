@@ -45,7 +45,8 @@ import {
   Printer,
   BookOpenText,
   LibraryBig,
-  ShieldAlert
+  ShieldAlert,
+  Eye
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -55,9 +56,10 @@ import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, PriorContext, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, Lead, PriorContext, RedTeamCritique, ResearchSession, SessionStatus, SwarmConfig } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
+const FRINGE_HEX = "#8b5cf6";
 
 const SAMPLE_TOPICS = [
   "Post-lithium solid-state electrolyte battery market readiness for commercial UAVs (2025-2030).",
@@ -251,6 +253,44 @@ function MissionParameters({
             </div>
           )}
         </div>
+      </div>
+
+      {/* Fringe Mode case-file toggle */}
+      <div className={compact ? "mt-3" : "mt-4"}>
+        <button
+          onClick={() => onChange({ ...config, fringeMode: !config.fringeMode })}
+          className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer"
+          title="Case-file mode for fringe/esoteric territory: investigation-native specialists, non-mainstream sourcing, Evidence Docket synthesis with open leads"
+        >
+          <div className="flex items-center gap-2 min-w-0 text-left">
+            <Eye
+              className="w-3.5 h-3.5 flex-shrink-0 transition-colors"
+              style={{ color: config.fringeMode ? FRINGE_HEX : undefined }}
+            />
+            <div className="min-w-0">
+              <div
+                className="text-[9px] font-mono uppercase tracking-widest font-bold transition-colors"
+                style={{ color: config.fringeMode ? FRINGE_HEX : undefined }}
+              >
+                Fringe Mode
+              </div>
+              {!compact && (
+                <div className="text-[9px] font-mono text-text-muted mt-0.5">
+                  Case-file investigation for edge territory
+                </div>
+              )}
+            </div>
+          </div>
+          <span
+            className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${config.fringeMode ? "" : "bg-border-warm"}`}
+            style={config.fringeMode ? { background: FRINGE_HEX } : undefined}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary transition-transform"
+              style={{ transform: config.fringeMode ? "translateX(16px)" : "translateX(0)" }}
+            />
+          </span>
+        </button>
       </div>
 
       {/* Red Team adversarial toggle */}
@@ -488,6 +528,7 @@ export default function App() {
         return {
           agentCount: typeof parsed.agentCount === "number" ? Math.max(3, Math.min(9, parsed.agentCount)) : "auto",
           depth: ["recon", "standard", "deep"].includes(parsed.depth) ? parsed.depth : "standard",
+          ...(parsed.fringeMode === true ? { fringeMode: true } : {}),
         };
       }
     } catch (e) {
@@ -917,6 +958,9 @@ export default function App() {
       directive: directive.trim(),
       synthesis: (session.synthesizedReport || "").slice(0, 9000),
       chatExcerpt,
+      // Fringe case files pass their ledger forward so the follow-up swarm
+      // works the open leads instead of restarting the case.
+      ...(session.leads && session.leads.length ? { leads: session.leads } : {}),
     };
     handleInitiateResearch(directive.trim(), prior);
   };
@@ -1342,6 +1386,38 @@ export default function App() {
       }
 
       addLog("ORCHESTRATOR", "Unified Swarm Synthesis Report assembled and validated against cross-discipline vectors.", "success");
+
+      // Fringe mode: extract the docket's Open Leads as structured case-file
+      // data (and update the status of leads carried from a parent case).
+      // Non-fatal — the docket itself already contains the leads as prose.
+      let caseLeads: Lead[] | undefined;
+      if (currentSession.config?.fringeMode) {
+        try {
+          addLog("SYSTEM", "CASE FILE: extracting open leads from the evidence docket...", "system");
+          const leadsResponse = await fetch("/api/research/extract-leads", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              synthesis: finalReport,
+              priorLeads: currentSession.priorContext?.leads || [],
+              settings: settings,
+            }),
+          });
+          if (leadsResponse.ok) {
+            const leadsData = await leadsResponse.json();
+            if (Array.isArray(leadsData.leads) && leadsData.leads.length > 0) {
+              caseLeads = leadsData.leads;
+              const openCount = leadsData.leads.filter((l: Lead) => l.status === "open").length;
+              addLog("SYSTEM", `CASE FILE: ${leadsData.leads.length} lead(s) on the ledger — ${openCount} open. Case remains active.`, "success");
+            }
+          } else {
+            addLog("SYSTEM", "CASE FILE: lead extraction failed — leads remain in the docket prose only.", "warning");
+          }
+        } catch (leadErr: any) {
+          addLog("SYSTEM", `CASE FILE: lead extraction failed (${leadErr.message}) — leads remain in the docket prose only.`, "warning");
+        }
+      }
+
       addLog("SYSTEM", "Investigation Complete. All channels returned to baseline idle status.", "system");
 
       const finalSession: ResearchSession = {
@@ -1349,6 +1425,7 @@ export default function App() {
         synthesizedReport: finalReport,
         status: "completed",
         ...(critiques.length ? { critiques } : {}),
+        ...(caseLeads ? { leads: caseLeads } : {}),
       };
 
       setSession(finalSession);
@@ -1832,6 +1909,15 @@ export default function App() {
                           title={`Follow-up of: "${session.priorContext.parentTopic}"`}
                         >
                           FOLLOW-UP
+                        </span>
+                      )}
+                      {session.config?.fringeMode && (
+                        <span
+                          className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md border"
+                          style={{ color: FRINGE_HEX, borderColor: `${FRINGE_HEX}66`, background: `${FRINGE_HEX}1a` }}
+                          title="Fringe Mode — case-file investigation"
+                        >
+                          FRINGE
                         </span>
                       )}
                     </div>

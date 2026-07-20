@@ -329,6 +329,18 @@ function LibraryCard({
             {session.chat.length}
           </span>
         )}
+        {session.config?.fringeMode && (() => {
+          const openLeads = (session.leads || []).filter((l) => l.status === "open").length;
+          return (
+            <span
+              className="text-[8px] font-mono uppercase tracking-widest font-bold px-1.5 py-0.5 rounded border"
+              style={{ color: "#8b5cf6", borderColor: "#8b5cf666", background: "#8b5cf61a" }}
+              title={openLeads > 0 ? `Fringe case file — ${openLeads} open lead(s) awaiting a follow-up commission` : "Fringe case file"}
+            >
+              {openLeads > 0 ? `OPEN CASE · ${openLeads}` : "FRINGE"}
+            </span>
+          );
+        })()}
       </div>
 
       {/* Tags */}
