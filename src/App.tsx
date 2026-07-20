@@ -66,6 +66,20 @@ const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
 const ROSTER_HEX = "#3b82f6";
 
+// Starter roster seeded into the Agent Library on first run only (when the
+// localStorage key has never been written). Deleting agents never re-seeds —
+// an emptied library stays empty.
+const STARTER_LIBRARY: SavedAgent[] = [
+  { id: "starter-1", name: "Kestrel", role: "Declassified-Archives Analyst", investigativeAngle: "Digs through FOIA reading rooms, national archives, and declassified program files for primary documents — chases accession numbers, release dates, and redaction patterns, not summaries of them.", colorTheme: "cyan", savedAt: "starter roster" },
+  { id: "starter-2", name: "Vann", role: "Historian of Heterodoxy", investigativeAngle: "Traces the lineage of claims and movements through out-of-print books, original-era newspapers, and primary texts — who first said it, how it mutated, and which retellings contaminated the record.", colorTheme: "rose", savedAt: "starter roster" },
+  { id: "starter-3", name: "Mox", role: "Quantitative Signals Analyst", investigativeAngle: "Hunts hard numbers: datasets, market figures, measurement records, statistical anomalies. Quantifies what others describe, flags where the data is too thin to carry the claims built on it.", colorTheme: "emerald", savedAt: "starter roster" },
+  { id: "starter-4", name: "Sable", role: "Practitioner-Community Ethnographer", investigativeAngle: "Embeds in the forums, Discords, mailing lists, and practitioner communities where a subject actually lives — surfaces insider terminology, firsthand accounts, internal debates, and what the community itself considers credible.", colorTheme: "purple", savedAt: "starter roster" },
+  { id: "starter-5", name: "Vector", role: "Frontier AI Research Watcher", investigativeAngle: "Tracks the bleeding edge of AI research and experimentation: preprints, lab announcements, model releases, benchmark shifts, and the informal researcher discourse that runs ahead of publication.", colorTheme: "indigo", savedAt: "starter roster" },
+  { id: "starter-6", name: "Gauge", role: "Patent & Technical Filings Examiner", investigativeAngle: "Reads patents, technical standards, regulatory filings, and engineering documents — what was actually claimed, what was actually built, and where filings contradict public narratives.", colorTheme: "amber", savedAt: "starter roster" },
+  { id: "starter-7", name: "Ledger", role: "Funding & Incentives Tracer", investigativeAngle: "Follows the money: grants, investors, procurement records, nonprofit filings, and conflicts of interest. Maps who benefits from a claim being believed or buried.", colorTheme: "blue", savedAt: "starter roster" },
+  { id: "starter-8", name: "Meridian", role: "Testimony & Anomaly Cataloguer", investigativeAngle: "Inventories witness accounts, case reports, and anomaly databases — dates, locations, chains of custody, and independence of sources — building the docket without prejudging it.", colorTheme: "fuchsia", savedAt: "starter roster" },
+];
+
 const SAMPLE_TOPICS = [
   "Post-lithium solid-state electrolyte battery market readiness for commercial UAVs (2025-2030).",
   "Socioeconomic impact of decentralized autonomous energy grids in Sub-Saharan communities.",
@@ -605,7 +619,8 @@ export default function App() {
     } catch (e) {
       // Ignore malformed library
     }
-    return [];
+    // Key never written → first run: seed the starter roster.
+    return STARTER_LIBRARY;
   });
   const [showAgentLibrary, setShowAgentLibrary] = useState(false);
 
