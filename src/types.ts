@@ -33,6 +33,18 @@ export interface Lead {
   status: "open" | "worked" | "dead-end";
 }
 
+// A major factual claim distilled from the swarm's reports for the Claim
+// Atlas evidence graph. supporters/disputers hold agent ids from this
+// session; sources are the URLs or source names the reports cited for it.
+export interface AtlasClaim {
+  id: string;
+  text: string;
+  theme: string;
+  supporters: string[];
+  disputers: string[];
+  sources: string[];
+}
+
 export interface RedTeamCritique {
   agentId: string;
   agentName: string;
@@ -83,6 +95,9 @@ export interface ResearchSession {
   chat?: ChatMessage[];
   // Fringe-mode case file: leads extracted from the synthesis docket.
   leads?: Lead[];
+  // Claim Atlas evidence graph, extracted on demand the first time the
+  // Atlas overlay is opened for this session (then reused from here).
+  claimAtlas?: AtlasClaim[];
   favorite?: boolean;
   tags?: string[];
   label?: string;

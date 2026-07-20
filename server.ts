@@ -1485,6 +1485,114 @@ Keep the whole cross-examination tight and high-signal: roughly 400-700 words. W
     }
   });
 
+  // 3.6. Claim Atlas Extraction Endpoint — distills a completed run's reports
+  // into a structured evidence graph: the major factual claims, which agents'
+  // reports support or dispute each one, and the sources cited for it. Plain
+  // JSON (not SSE); powers the Claim Atlas overlay in the SPA.
+  app.post("/api/research/extract-claims", async (req, res) => {
+    try {
+      const { reports, synthesizedReport, settings } = req.body;
+      const usableReports = Array.isArray(reports)
+        ? reports.filter((r: any) => r && typeof r.agentId === "string" && typeof r.report === "string" && r.report.trim())
+        : [];
+      if (usableReports.length === 0) {
+        return res.status(400).json({ error: "At least one specialist report (with agentId) is required." });
+      }
+
+      console.log(`Extracting claim atlas from ${usableReports.length} specialist reports`);
+
+      // Bound the payload: deep-depth reports can each run tens of thousands
+      // of chars, and the whole set must fit one orchestrator context. Slice
+      // rather than reject so extraction always runs.
+      const reportsBlock = usableReports
+        .map((r: any) => `--- REPORT BY ${r.agentName || r.agentId} (agent id: "${r.agentId}", role: ${r.agentRole || "specialist"}) ---\n${r.report.slice(0, 8000)}`)
+        .join("\n\n");
+      const synthesisBlock = typeof synthesizedReport === "string" && synthesizedReport.trim()
+        ? `\n\nSYNTHESIZED REPORT (cross-specialist blend — use it to spot agreement and conflict):\n${synthesizedReport.slice(0, 10000)}`
+        : "";
+
+      const validAgentIds: string[] = usableReports.map((r: any) => r.agentId);
+
+      const prompt = `SPECIALIST REPORTS:
+${reportsBlock}${synthesisBlock}
+
+Extract the 8-20 MAJOR factual claims made across these reports — the load-bearing assertions a reader would want verified, not throwaway details. For each claim provide:
+1. "text": the claim as one clear, self-contained sentence.
+2. "theme": a short topical label of 2-4 words grouping related claims. REUSE the same label for claims in the same territory (aim for 3-6 themes total, not one per claim).
+3. "supporters": the agent ids whose reports assert or corroborate the claim. Use ONLY these ids: ${validAgentIds.join(", ")}.
+4. "disputers": the agent ids whose reports contradict or cast doubt on the claim (an empty array is fine — most claims are undisputed).
+5. "sources": 1-4 sources cited for the claim (URLs when the reports give them, otherwise the publication/organization/document names as written).
+Every claim needs at least one supporter or disputer. Cover the breadth of the reports; do not let a single specialist dominate the atlas.`;
+
+      const systemInstruction = "You are an evidence cartographer for a research swarm. You map which specialists stand behind which factual claims and which push back, judging support and dispute strictly from what the reports actually say — never from your own knowledge of the topic.";
+
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          claims: {
+            type: Type.ARRAY,
+            description: "The major factual claims across the reports, with per-claim backing.",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING, description: "Stable claim id, e.g. claim-3" },
+                text: { type: Type.STRING, description: "The claim as one clear, self-contained sentence." },
+                theme: { type: Type.STRING, description: "Short topical grouping label (2-4 words), shared by related claims." },
+                supporters: { type: Type.ARRAY, description: "Agent ids whose reports support the claim.", items: { type: Type.STRING } },
+                disputers: { type: Type.ARRAY, description: "Agent ids whose reports dispute the claim (may be empty).", items: { type: Type.STRING } },
+                sources: { type: Type.ARRAY, description: "1-4 cited sources: URLs or source names.", items: { type: Type.STRING } },
+              },
+              required: ["id", "text", "theme", "supporters", "disputers", "sources"],
+            },
+          },
+        },
+        required: ["claims"],
+      };
+
+      const result = await generateUnifiedJSON("orchestrator", settings, prompt, systemInstruction, responseSchema);
+      const rawClaims = Array.isArray(result?.claims) ? result.claims : Array.isArray(result) ? result : [];
+
+      // Models occasionally emit agent NAMES where ids were asked for — map
+      // them back to ids instead of dropping the edge.
+      const idSet = new Set(validAgentIds);
+      const nameToId = new Map<string, string>(
+        usableReports.map((r: any) => [String(r.agentName || "").trim().toLowerCase(), r.agentId] as [string, string])
+      );
+      const toAgentIds = (arr: any): string[] => {
+        if (!Array.isArray(arr)) return [];
+        const mapped = arr
+          .filter((v: any) => typeof v === "string" && v.trim())
+          .map((v: string) => (idSet.has(v.trim()) ? v.trim() : nameToId.get(v.trim().toLowerCase()) || ""))
+          .filter((v: string) => v !== "");
+        return [...new Set(mapped)];
+      };
+
+      const cleanClaims = rawClaims
+        .filter((c: any) => c && typeof c.text === "string" && c.text.trim())
+        .slice(0, 24)
+        .map((c: any, idx: number) => ({
+          // Ids are reissued sequentially (claim-1...) — unlike leads they never
+          // carry across sessions, so uniqueness matters more than model output.
+          id: `claim-${idx + 1}`,
+          text: c.text.trim(),
+          theme: typeof c.theme === "string" && c.theme.trim() ? c.theme.trim() : "General",
+          supporters: toAgentIds(c.supporters),
+          disputers: toAgentIds(c.disputers),
+          sources: Array.isArray(c.sources)
+            ? [...new Set(c.sources.filter((s: any) => typeof s === "string" && s.trim()).map((s: string) => s.trim()))].slice(0, 4)
+            : [],
+        }))
+        // A claim no agent stands behind (or against) has no edges — it is
+        // unrenderable in the atlas, so drop it.
+        .filter((c: any) => c.supporters.length > 0 || c.disputers.length > 0);
+
+      res.json({ claims: cleanClaims });
+    } catch (error: any) {
+      console.error("Error in /api/research/extract-claims:", error);
+      res.status(500).json({ error: error.message || "Failed to extract the claim atlas." });
+    }
+  });
+
   // 4. Interrogation Room Endpoint - Chat with the completed swarm via SSE (grounded, no web search)
   app.post("/api/research/interrogate-stream", async (req, res) => {
     try {
