@@ -257,6 +257,11 @@ async function callAnthropic(apiKey: string, body: any): Promise<any> {
 
 const SEARXNG_BASE_URL = (process.env.SEARXNG_BASE_URL || "http://localhost:8888").replace(/\/$/, "");
 
+// Optional API fallbacks for when SearXNG is unreachable or returns nothing.
+// Leave the env vars unset to disable an engine.
+const BRAVE_SEARCH_API_KEY = process.env.BRAVE_SEARCH_API_KEY || "";
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY || "";
+
 const NATIVE_SEARCH_PROVIDERS = new Set(["gemini", "anthropic", "openrouter", "venice"]);
 
 interface SearchHit {
@@ -283,31 +288,86 @@ async function searxngSearch(query: string, maxResults = 8): Promise<SearchHit[]
   }
 }
 
-// Runs all queries in parallel, dedupes by URL, and formats a grounding block
-// for prompt injection. Returns hitCount 0 when SearXNG is unreachable or dry.
-async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number }> {
-  const seen = new Set<string>();
-  const hits: SearchHit[] = [];
-  const settled = await Promise.allSettled(queries.map((q) => searxngSearch(q)));
-  for (const result of settled) {
-    if (result.status !== "fulfilled") {
-      console.warn(`[Grounding] SearXNG query failed: ${result.reason?.message || result.reason}`);
-      continue;
-    }
-    for (const hit of result.value) {
-      if (!hit.url || seen.has(hit.url)) continue;
-      seen.add(hit.url);
-      hits.push(hit);
-    }
+async function braveSearch(query: string, maxResults = 8): Promise<SearchHit[]> {
+  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${maxResults}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(url, {
+      headers: { "Accept": "application/json", "X-Subscription-Token": BRAVE_SEARCH_API_KEY },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Brave responded with status ${response.status}`);
+    const data = await response.json() as any;
+    return (data.web?.results || []).slice(0, maxResults).map((r: any) => ({
+      title: r.title || "(untitled)",
+      url: r.url || "",
+      snippet: (r.description || "").slice(0, 500),
+    }));
+  } finally {
+    clearTimeout(timer);
   }
-  if (hits.length === 0) return { block: "", hitCount: 0 };
+}
 
-  const today = new Date().toISOString().slice(0, 10);
-  const lines = hits.slice(0, 16).map(
-    (h, i) => `[${i + 1}] ${h.title}\n    URL: ${h.url}\n    ${h.snippet}`
-  );
-  const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} via live search — current, real-world data):\n${lines.join("\n")}`;
-  return { block, hitCount: hits.length };
+async function tavilySearch(query: string, maxResults = 8): Promise<SearchHit[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: TAVILY_API_KEY, query, max_results: maxResults }),
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Tavily responded with status ${response.status}`);
+    const data = await response.json() as any;
+    return (data.results || []).slice(0, maxResults).map((r: any) => ({
+      title: r.title || "(untitled)",
+      url: r.url || "",
+      snippet: (r.content || "").slice(0, 500),
+    }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Runs all queries in parallel against an engine chain — SearXNG first (free,
+// aggregates many engines), then any configured API fallbacks. The first
+// engine that returns hits wins; `engine` reports which one grounded the run.
+async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number; engine: string }> {
+  const engines: { name: string; enabled: boolean; run: (q: string) => Promise<SearchHit[]> }[] = [
+    { name: "SearXNG", enabled: true, run: (q) => searxngSearch(q) },
+    { name: "Brave", enabled: !!BRAVE_SEARCH_API_KEY, run: (q) => braveSearch(q) },
+    { name: "Tavily", enabled: !!TAVILY_API_KEY, run: (q) => tavilySearch(q) },
+  ];
+
+  for (const engine of engines) {
+    if (!engine.enabled) continue;
+    const seen = new Set<string>();
+    const hits: SearchHit[] = [];
+    const settled = await Promise.allSettled(queries.map((q) => engine.run(q)));
+    for (const result of settled) {
+      if (result.status !== "fulfilled") {
+        console.warn(`[Grounding] ${engine.name} query failed: ${result.reason?.message || result.reason}`);
+        continue;
+      }
+      for (const hit of result.value) {
+        if (!hit.url || seen.has(hit.url)) continue;
+        seen.add(hit.url);
+        hits.push(hit);
+      }
+    }
+    if (hits.length > 0) {
+      const today = new Date().toISOString().slice(0, 10);
+      const lines = hits.slice(0, 16).map(
+        (h, i) => `[${i + 1}] ${h.title}\n    URL: ${h.url}\n    ${h.snippet}`
+      );
+      const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} via live search — current, real-world data):\n${lines.join("\n")}`;
+      return { block, hitCount: hits.length, engine: engine.name };
+    }
+    console.warn(`[Grounding] ${engine.name} returned no hits${engine.name === "SearXNG" ? ` (${SEARXNG_BASE_URL})` : ""} — trying next engine.`);
+  }
+  return { block: "", hitCount: 0, engine: "none" };
 }
 
 export interface GroundingInfo {
@@ -522,13 +582,13 @@ async function runUniversalStream(
   if (hasSearch && !NATIVE_SEARCH_PROVIDERS.has(provider)) {
     try {
       const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
-      const { block, hitCount } = await gatherLiveContext(queries);
+      const { block, hitCount, engine } = await gatherLiveContext(queries);
       if (hitCount > 0) {
         prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory): You have NO live internet access of your own — the LIVE WEB SEARCH RESULTS above are your only source of current information. Ground every time-sensitive claim in them and cite the numbered sources inline with their URLs. Where the live results do not cover a point, state that explicitly instead of presenting memorized training data as current.`;
-        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected (${provider} has no native web search) — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
+        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected via ${engine} (${provider} has no native web search) — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
       } else {
         prompt = `${prompt}\n\nWARNING — LIVE SEARCH UNAVAILABLE (a tooling failure, NOT a reflection on the topic): no live web data could be retrieved for this run. You MUST state this plainly at the top of your report. Your training data may predate recent events, so NEVER declare that something "does not exist" or that there is "no evidence" of it based on memory alone — recent products, events, and coverage may simply postdate your knowledge. Write "live verification was unavailable this run" instead, flag memory-based findings as potentially outdated, and date-stamp any claim that could have changed.`;
-        onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL} returned no results) — falling back to model knowledge` });
+        onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL}${BRAVE_SEARCH_API_KEY ? " + Brave" : ""}${TAVILY_API_KEY ? " + Tavily" : ""} returned no results) — falling back to model knowledge` });
       }
     } catch (err: any) {
       console.warn(`[Grounding] Live context gathering failed: ${err.message}`);
