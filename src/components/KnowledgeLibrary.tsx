@@ -18,6 +18,7 @@ import {
   MessagesSquare,
   Plus,
   LibraryBig,
+  Radar,
 } from "lucide-react";
 import { ResearchSession } from "../types";
 import { buildDossierHtml } from "../lib/dossier";
@@ -30,6 +31,8 @@ interface KnowledgeLibraryProps {
   onRename: (id: string, label: string) => void;
   onDelete: (id: string) => void;
   onSetTags: (id: string, tags: string[]) => void;
+  onToggleWatch: (id: string) => void;
+  onDeltaSweep: (session: ResearchSession) => void;
   onImport: (sessions: ResearchSession[]) => void;
   getAgentColorHex: (theme: string) => string;
   addLog: (
@@ -150,6 +153,8 @@ interface LibraryCardProps {
   onRename: (id: string, label: string) => void;
   onDelete: (id: string) => void;
   onSetTags: (id: string, tags: string[]) => void;
+  onToggleWatch: (id: string) => void;
+  onDeltaSweep: (session: ResearchSession) => void;
   getAgentColorHex: (theme: string) => string;
 }
 
@@ -163,6 +168,8 @@ function LibraryCard({
   onRename,
   onDelete,
   onSetTags,
+  onToggleWatch,
+  onDeltaSweep,
   getAgentColorHex,
 }: LibraryCardProps) {
   const [renaming, setRenaming] = useState(false);
@@ -341,6 +348,15 @@ function LibraryCard({
             </span>
           );
         })()}
+        {session.watch && (
+          <span
+            className="text-[8px] font-mono uppercase tracking-widest font-bold px-1.5 py-0.5 rounded border"
+            style={{ color: "#14b8a6", borderColor: "#14b8a666", background: "#14b8a61a" }}
+            title="Sentinel watch active — run a Delta Sweep to hunt changes since this session"
+          >
+            WATCHING
+          </span>
+        )}
       </div>
 
       {/* Tags */}
@@ -416,6 +432,34 @@ function LibraryCard({
         >
           <FileDown className="w-3.5 h-3.5" />
         </button>
+        {/* Sentinel Mode: only completed sessions can be watched (a delta
+            sweep needs a settled synthesis to diff against). Teal (#14b8a6)
+            is inline-styled like the fringe chip — it's not in the theme
+            palette. */}
+        {session.status === "completed" && (
+          <button
+            onClick={() => onToggleWatch(session.id)}
+            className={`w-8 h-8 flex items-center justify-center border rounded-lg transition-colors cursor-pointer ${
+              session.watch
+                ? "bg-bg-primary"
+                : "text-text-muted bg-bg-primary/40 hover:bg-bg-primary border-border-warm"
+            }`}
+            style={session.watch ? { color: "#14b8a6", borderColor: "#14b8a666" } : undefined}
+            title={session.watch ? "Sentinel watch active — click to stand down" : "Sentinel: place this session under standing watch"}
+          >
+            <Radar className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {session.watch && (
+          <button
+            onClick={() => onDeltaSweep(session)}
+            className="h-8 flex items-center justify-center gap-1 px-2.5 border rounded-lg transition-colors cursor-pointer text-[9px] font-mono uppercase tracking-wider font-bold hover:brightness-125"
+            style={{ color: "#14b8a6", borderColor: "#14b8a666", background: "#14b8a61a" }}
+            title="Delta Sweep: commission a swarm to report only what changed since this session"
+          >
+            Delta Sweep
+          </button>
+        )}
         <button
           onClick={armDelete}
           className={`h-8 flex items-center justify-center gap-1 border rounded-lg transition-colors cursor-pointer ${
@@ -441,6 +485,8 @@ export default function KnowledgeLibrary({
   onRename,
   onDelete,
   onSetTags,
+  onToggleWatch,
+  onDeltaSweep,
   onImport,
   getAgentColorHex,
   addLog,
@@ -731,6 +777,8 @@ export default function KnowledgeLibrary({
                 onRename={onRename}
                 onDelete={onDelete}
                 onSetTags={onSetTags}
+                onToggleWatch={onToggleWatch}
+                onDeltaSweep={onDeltaSweep}
                 getAgentColorHex={getAgentColorHex}
               />
             ))}

@@ -772,6 +772,11 @@ export default function App() {
     setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, favorite: !s.favorite } : s))));
   };
 
+  // Sentinel Mode: arm/disarm a standing watch on an archived session.
+  const toggleWatch = (id: string) => {
+    setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, watch: !s.watch } : s))));
+  };
+
   const renameSession = (id: string, label: string) => {
     const trimmed = label.trim();
     setHistory(prev => persistHistory(prev.map(s => (s.id === id ? { ...s, label: trimmed || undefined } : s))));
@@ -871,7 +876,13 @@ export default function App() {
     setSession(newSession);
     addLog("SYSTEM", `Initializing orchestration sequence for: "${searchTopic}"`, "system");
     if (priorContext) {
-      addLog("ORCHESTRATOR", `FOLLOW-UP commission — carrying forward findings from prior mission: "${priorContext.parentTopic}"`, "system");
+      addLog(
+        "ORCHESTRATOR",
+        priorContext.delta
+          ? `SENTINEL delta sweep — hunting changes since prior mission: "${priorContext.parentTopic}"`
+          : `FOLLOW-UP commission — carrying forward findings from prior mission: "${priorContext.parentTopic}"`,
+        "system"
+      );
     }
     addLog("ORCHESTRATOR", "Structuring research requirements into high-fidelity specialist dimensions...", "info");
 
@@ -963,6 +974,31 @@ export default function App() {
       ...(session.leads && session.leads.length ? { leads: session.leads } : {}),
     };
     handleInitiateResearch(directive.trim(), prior);
+  };
+
+  // Sentinel Mode: manual delta sweep on a watched library session. Same
+  // machinery as handleLaunchFollowUp, but the directive is auto-generated
+  // (change-hunting since the session's timestamp) and delta: true flips the
+  // server prompts into delta mode. No scheduling — user-triggered only.
+  const handleDeltaSweep = (watched: ResearchSession) => {
+    if (!watched.synthesizedReport) return; // nothing settled to diff against
+    const directive = `Delta sweep as of ${new Date().toDateString()}: what has changed regarding "${watched.topic}" since ${watched.timestamp}? Focus exclusively on new developments, corrections, and anything that confirms or overturns the prior findings.`;
+    const chatExcerpt = (watched.chat ?? [])
+      .slice(-8)
+      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 500)}`)
+      .join("\n");
+    const prior: PriorContext = {
+      parentSessionId: watched.id,
+      parentTopic: watched.topic,
+      directive,
+      synthesis: (watched.synthesizedReport || "").slice(0, 9000),
+      chatExcerpt,
+      delta: true,
+      // Fringe case files still pass their ledger forward on a sweep.
+      ...(watched.leads && watched.leads.length ? { leads: watched.leads } : {}),
+    };
+    setLibraryOpen(false); // the sweep runs in the main pipeline view
+    handleInitiateResearch(directive, prior);
   };
 
   // Simulate progress counters for parallel agents and coordinate API runs
@@ -2865,6 +2901,8 @@ export default function App() {
           onRename={renameSession}
           onDelete={deleteSession}
           onSetTags={setSessionTags}
+          onToggleWatch={toggleWatch}
+          onDeltaSweep={handleDeltaSweep}
           onImport={importSessions}
           getAgentColorHex={getAgentColorHex}
           addLog={addLog}

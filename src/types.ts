@@ -53,6 +53,10 @@ export interface PriorContext {
   chatExcerpt: string;
   // Open leads carried from the parent case file (fringe mode).
   leads?: Lead[];
+  // Sentinel Mode: this follow-up is a DELTA SWEEP — the swarm hunts changes
+  // since the prior run instead of extending it, and the synthesis becomes a
+  // Delta Briefing.
+  delta?: boolean;
 }
 
 export interface ChatMessage {
@@ -83,6 +87,9 @@ export interface ResearchSession {
   chat?: ChatMessage[];
   // Fringe-mode case file: leads extracted from the synthesis docket.
   leads?: Lead[];
+  // Sentinel Mode: session is under standing watch — the library offers
+  // manual Delta Sweep runs against it (no scheduling; user-triggered only).
+  watch?: boolean;
   favorite?: boolean;
   tags?: string[];
   label?: string;
