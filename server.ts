@@ -297,14 +297,23 @@ const TAVILY_API_KEY = process.env.TAVILY_API_KEY || "";
 
 const NATIVE_SEARCH_PROVIDERS = new Set(["gemini", "anthropic", "openrouter", "venice"]);
 
+// Providers whose native search is genuinely agentic (the model iterates its
+// own real queries). Everyone else gets the server-side injected block —
+// including OpenRouter/Venice, whose web plugins auto-derive a single query
+// from the prompt and miss niche exact-phrase targets.
+const AGENTIC_SEARCH_PROVIDERS = new Set(["gemini", "anthropic"]);
+
 interface SearchHit {
   title: string;
   url: string;
   snippet: string;
+  publishedDate?: string;
+  fromNews?: boolean;
 }
 
-async function searxngSearch(query: string, maxResults = 8): Promise<SearchHit[]> {
-  const url = `${SEARXNG_BASE_URL}/search?q=${encodeURIComponent(query)}&format=json`;
+async function searxngSearch(query: string, maxResults = 10, category?: string): Promise<SearchHit[]> {
+  const catParam = category ? `&categories=${encodeURIComponent(category)}` : "";
+  const url = `${SEARXNG_BASE_URL}/search?q=${encodeURIComponent(query)}&format=json${catParam}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
@@ -315,10 +324,51 @@ async function searxngSearch(query: string, maxResults = 8): Promise<SearchHit[]
       title: r.title || "(untitled)",
       url: r.url || "",
       snippet: (r.content || "").slice(0, 500),
+      publishedDate: typeof r.publishedDate === "string" ? r.publishedDate.slice(0, 10) : undefined,
+      fromNews: category === "news",
     }));
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Mechanical query variants: exact quoted phrase and de-glued identifiers
+// (DUDE44BRAVO -> DUDE 44 BRAVO). These guarantee a niche exact-phrase target
+// still gets hunted even when the LLM query planner fails or under-delivers.
+function buildQueryVariants(topic: string): string[] {
+  const variants = new Set<string>();
+  const t = topic.trim().slice(0, 120);
+  if (!t) return [];
+  variants.add(t);
+  const spaced = t.replace(/([A-Za-z])(\d)/g, "$1 $2").replace(/(\d)([A-Za-z])/g, "$1 $2");
+  if (spaced !== t) variants.add(spaced);
+  if (t.length <= 60 && !t.includes('"')) variants.add(`"${t}"`);
+  if (spaced !== t && spaced.length <= 60) variants.add(`"${spaced}"`);
+  return [...variants];
+}
+
+const QUERY_STOPWORDS = new Set(["the", "and", "for", "with", "that", "this", "from", "what", "who", "how", "are", "was", "were", "latest", "news", "about", "into", "over", "under", "when", "where", "which", "does", "did", "has", "have", "its", "their", "your", "our", "not", "all", "any", "site", "org", "com"]);
+
+// Rank hits by overlap with the queries' distinctive terms so junk from noisy
+// engines sinks instead of crowding real coverage out of the context block.
+function rankHits(hits: SearchHit[], queries: string[]): SearchHit[] {
+  const terms = new Set<string>();
+  for (const q of queries) {
+    for (const w of q.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
+      if (w.length >= 2 && !QUERY_STOPWORDS.has(w)) terms.add(w);
+    }
+  }
+  const scored = hits.map((h) => {
+    const text = `${h.title} ${h.snippet}`.toLowerCase();
+    let score = 0;
+    for (const term of terms) if (text.includes(term)) score++;
+    if (h.fromNews) score += 1;
+    return { h, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  // When enough hits genuinely match, drop the zero-overlap junk entirely.
+  const matching = scored.filter((s) => s.score >= 2);
+  return (matching.length >= 5 ? matching : scored).map((s) => s.h);
 }
 
 async function braveSearch(query: string, maxResults = 8): Promise<SearchHit[]> {
@@ -365,38 +415,73 @@ async function tavilySearch(query: string, maxResults = 8): Promise<SearchHit[]>
 }
 
 // Runs all queries in parallel against an engine chain — SearXNG first (free,
-// aggregates many engines), then any configured API fallbacks. The first
-// engine that returns hits wins; `engine` reports which one grounded the run.
+// aggregates many engines; queried in BOTH the general and news categories,
+// because the general category's engine soup buries current events that the
+// news category surfaces cleanly), then any configured API fallbacks. The
+// first engine that returns hits wins; `engine` reports which one grounded
+// the run. Hits are relevance-ranked and the block states exactly which
+// queries were executed so agents can report methodology honestly.
 async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number; engine: string }> {
-  const engines: { name: string; enabled: boolean; run: (q: string) => Promise<SearchHit[]> }[] = [
-    { name: "SearXNG", enabled: true, run: (q) => searxngSearch(q) },
-    { name: "Brave", enabled: !!BRAVE_SEARCH_API_KEY, run: (q) => braveSearch(q) },
-    { name: "Tavily", enabled: !!TAVILY_API_KEY, run: (q) => tavilySearch(q) },
+  const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
+
+  const engines: { name: string; enabled: boolean; jobs: () => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
+    {
+      name: "SearXNG",
+      enabled: true,
+      jobs: () => uniqueQueries.flatMap((q) => [
+        { query: q, run: () => searxngSearch(q, 10) },
+        { query: q, run: () => searxngSearch(q, 10, "news") },
+      ]),
+    },
+    {
+      name: "Brave",
+      enabled: !!BRAVE_SEARCH_API_KEY,
+      jobs: () => uniqueQueries.map((q) => ({ query: q, run: () => braveSearch(q) })),
+    },
+    {
+      name: "Tavily",
+      enabled: !!TAVILY_API_KEY,
+      jobs: () => uniqueQueries.map((q) => ({ query: q, run: () => tavilySearch(q) })),
+    },
   ];
 
   for (const engine of engines) {
     if (!engine.enabled) continue;
+    const jobs = engine.jobs();
     const seen = new Set<string>();
     const hits: SearchHit[] = [];
-    const settled = await Promise.allSettled(queries.map((q) => engine.run(q)));
-    for (const result of settled) {
+    const perQuery = new Map<string, number>();
+    const settled = await Promise.allSettled(jobs.map((j) => j.run()));
+    settled.forEach((result, idx) => {
+      const job = jobs[idx];
       if (result.status !== "fulfilled") {
-        console.warn(`[Grounding] ${engine.name} query failed: ${result.reason?.message || result.reason}`);
-        continue;
+        console.warn(`[Grounding] ${engine.name} query failed ("${job.query.slice(0, 60)}"): ${result.reason?.message || result.reason}`);
+        return;
       }
+      perQuery.set(job.query, (perQuery.get(job.query) || 0) + result.value.length);
       for (const hit of result.value) {
         if (!hit.url || seen.has(hit.url)) continue;
         seen.add(hit.url);
         hits.push(hit);
       }
-    }
+    });
+
     if (hits.length > 0) {
+      const ranked = rankHits(hits, uniqueQueries).slice(0, 20);
       const today = new Date().toISOString().slice(0, 10);
-      const lines = hits.slice(0, 16).map(
-        (h, i) => `[${i + 1}] ${h.title}\n    URL: ${h.url}\n    ${h.snippet}`
+      const queryLines = uniqueQueries
+        .map((q) => `- "${q}" (${perQuery.get(q) || 0} raw hits)`)
+        .join("\n");
+      const lines = ranked.map(
+        (h, i) => `[${i + 1}] ${h.title}${h.publishedDate ? ` (published ${h.publishedDate})` : ""}\n    URL: ${h.url}\n    ${h.snippet}`
       );
-      const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} via live search — current, real-world data):\n${lines.join("\n")}`;
-      return { block, hitCount: hits.length, engine: engine.name };
+      const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} UTC via ${engine.name} — current, real-world data)
+Queries the research system executed on your behalf (these are the ONLY searches run for you):
+${queryLines}
+
+Results (deduplicated, relevance-ranked):
+${lines.join("\n")}`;
+      return { block, hitCount: ranked.length, engine: engine.name };
     }
     console.warn(`[Grounding] ${engine.name} returned no hits${engine.name === "SearXNG" ? ` (${SEARXNG_BASE_URL})` : ""} — trying next engine.`);
   }
@@ -672,12 +757,19 @@ async function runUniversalStream(
   // Providers without native search get live SearXNG results injected into
   // the prompt; if that fails the model is told to caveat staleness instead
   // of silently roleplaying a web search it never ran.
-  if (hasSearch && !NATIVE_SEARCH_PROVIDERS.has(provider)) {
+  if (hasSearch && !AGENTIC_SEARCH_PROVIDERS.has(provider)) {
     try {
       const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
       const { block, hitCount, engine } = await gatherLiveContext(queries);
       if (hitCount > 0) {
-        prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory): You have NO live internet access of your own — the LIVE WEB SEARCH RESULTS above are your only source of current information. Ground every time-sensitive claim in them and cite the numbered sources inline with their URLs. Where the live results do not cover a point, state that explicitly instead of presenting memorized training data as current.`;
+        const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
+          ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
+          : "- You have NO search capability of your own — no Google, no databases, no registries, no archives. The searches listed in the LIVE WEB SEARCH RESULTS block are the ONLY searches that were run, by the research system, on your behalf.";
+        prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory):
+${noOwnSearch}
+- NEVER claim to have searched, queried, or checked any engine, database, or source yourself. If your report includes a methodology section, it must describe exactly the queries listed above and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
+- Ground every time-sensitive claim in the numbered results and cite them inline with their URLs. Where the results do not cover a point, write "the provided live results do not cover this" — do not fill the gap with memorized training data presented as current.
+- Result dates may differ from your stated date by up to a day due to timezones. That is normal publishing skew, not an anomaly — do not build theories on it.`;
         onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected via ${engine} (${provider} has no native web search) — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
       } else {
         prompt = `${prompt}\n\nWARNING — LIVE SEARCH UNAVAILABLE (a tooling failure, NOT a reflection on the topic): no live web data could be retrieved for this run. You MUST state this plainly at the top of your report. Your training data may predate recent events, so NEVER declare that something "does not exist" or that there is "no evidence" of it based on memory alone — recent products, events, and coverage may simply postdate your knowledge. Write "live verification was unavailable this run" instead, flag memory-based findings as potentially outdated, and date-stamp any claim that could have changed.`;
@@ -688,6 +780,10 @@ async function runUniversalStream(
       prompt = `${prompt}\n\nWARNING: No live web data could be retrieved for this run. You must explicitly flag that your findings come from model training data and may be outdated, and date-stamp any claim that could have changed.`;
       onGrounding?.({ mode: "none", detail: `Live search failed (${err.message}) — falling back to model knowledge` });
     }
+  } else if (hasSearch) {
+    // Native-search providers run real queries — but hold them to the same
+    // honesty bar: report only searches actually executed.
+    prompt = `${prompt}\n\nSEARCH HONESTY (mandatory): Run real queries with your web search tool and cite the actual results. Never describe a search you did not actually execute this run, and never report a null for a query you did not run — if a real query returned nothing, quote that exact query. Result dates may differ from your stated date by up to a day due to timezones; that is normal, not an anomaly.`;
   }
 
   if (provider === "gemini") {
@@ -1373,7 +1469,7 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       // Anti-stale-data guardrails: every agent knows today's date, must
       // prefer live web findings over memory, and must cite sources.
       const today = new Date().toDateString();
-      const datePreamble = `Today's date is ${today}. Your training data predates this — treat live web information as authoritative over memorized knowledge, and date-stamp any claim that could have changed since your training.`;
+      const datePreamble = `Today's date is ${today} (local server time; UTC may differ by up to a day, so source timestamps within a day of this date are normal, not anomalies). Your training data predates this — treat live web information as authoritative over memorized knowledge, and date-stamp any claim that could have changed since your training.`;
       const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge. Absence from your training data is NEVER evidence of absence — do not declare a subject nonexistent or "without evidence" unless live search actually returned nothing relevant, and even then write "live search returned no coverage of this" rather than asserting it does not exist.`;
 
       let prompt: string;
@@ -1388,19 +1484,19 @@ Structure your response with Markdown:
 - 'Key Findings' as a set of tight, information-rich bullet points.
 - 'Critical Insights' capturing the 2-4 most consequential takeaways.
 
-Utilize web search to ground your points. Write in your persona, first person. Prioritize precision over volume.`;
+Ground your points in the live web intelligence available to you this run and cite sources. Write in your persona, first person. Prioritize precision over volume.`;
       } else if (depth === "deep") {
         prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
 The overarching research project is: "${topic}".
 Your specific investigative assignment is: "${agent.investigativeAngle}".
 
-Conduct an EXTENSIVE, IN-DEPTH investigation based on your role and instructions. You must think deeply, utilize web searches extensively, and provide a massive, comprehensive professional specialist report. Do not hold back; elaborate significantly on every point.
+Conduct an EXTENSIVE, IN-DEPTH investigation based on your role and instructions. You must think deeply, ground your work in the live web intelligence available to you this run, and provide a massive, comprehensive professional specialist report. Do not hold back; elaborate significantly on every point.
 Structure your response beautifully with Markdown:
 - Use clear headers.
 - Include a 'Role Perspective' section detailing how a ${agent.role} uniquely views this issue.
 - Include 'Detailed Findings' with robust analysis, structured points, data, and technical breakdowns.
 - Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
-- Include 'Methodology & Data Vectors' detailing what parameters you considered.
+- Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
 DEEP-ANALYSIS REQUIREMENTS (mandatory):
 - Provide QUANTIFIED data, figures, and estimates wherever possible (ranges, magnitudes, timelines, costs).
@@ -1414,13 +1510,13 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 The overarching research project is: "${topic}".
 Your specific investigative assignment is: "${agent.investigativeAngle}".
 
-Conduct an EXTENSIVE, IN-DEPTH investigation based on your role and instructions. You must think deeply, utilize web searches extensively, and provide a massive, comprehensive professional specialist report. Do not hold back; elaborate significantly on every point.
+Conduct an EXTENSIVE, IN-DEPTH investigation based on your role and instructions. You must think deeply, ground your work in the live web intelligence available to you this run, and provide a massive, comprehensive professional specialist report. Do not hold back; elaborate significantly on every point.
 Structure your response beautifully with Markdown:
 - Use clear headers.
 - Include a 'Role Perspective' section detailing how a ${agent.role} uniquely views this issue.
 - Include 'Detailed Findings' with robust analysis, structured points, data, and technical breakdowns.
 - Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
-- Include 'Methodology & Data Vectors' detailing what parameters you considered.
+- Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
 Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
       }
@@ -1462,7 +1558,12 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
       // orchestrator-model call). Keep one raw-topic query as a baseline;
       // fall back to the naive set entirely if planning fails.
       const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings);
-      const searchQueries = planned.length >= 2 ? [...planned, shortTopic] : naiveQueries;
+      // Exact-phrase and de-glued variants of the topic ride along regardless
+      // of planner quality — a niche identifier must always get a direct hunt.
+      const topicVariants = buildQueryVariants(String(topic));
+      const searchQueries = planned.length >= 2
+        ? [...planned, ...topicVariants]
+        : [...naiveQueries, ...topicVariants];
       if (planned.length >= 2) {
         console.log(`[QueryPlan] ${agent.name}: ${planned.map((q) => `"${q}"`).join(" | ")}`);
         // Native-search providers run their own queries — hand them the same
@@ -2082,7 +2183,7 @@ Every claim needs at least one supporter or disputer. Cover the breadth of the r
         systemInstruction = "You are the Swarm Intelligence panel — the collective voice of the specialist agents plus the lead orchestrator who synthesized their findings. You answer follow-up interrogations strictly from the intelligence already gathered, never from outside knowledge.";
         prompt = `TOPIC: "${topic}"
 
-A user is interrogating the swarm with a follow-up question. Answer using ONLY the intelligence dossier below. Do not introduce outside facts and do not speculate beyond what the specialists reported.
+A user is interrogating the swarm with a follow-up question. The intelligence dossier below is your primary source. If LIVE WEB SEARCH RESULTS were provided above, use them to VERIFY, UPDATE, or CHALLENGE the dossier where the question calls for it — and ALWAYS label which statements come from the dossier versus the live check.
 
 INTELLIGENCE DOSSIER:
 ${intelligence}${historyBlock}
@@ -2090,7 +2191,7 @@ ${intelligence}${historyBlock}
 USER QUESTION: "${question}"
 
 RESPONSE REQUIREMENTS:
-- Answer strictly from the intelligence above. If it does not cover the question, say so plainly, state exactly what is missing, and name which specialist angle (by role) would need a follow-up investigation to close the gap.
+- Answer from the dossier plus any live check results, clearly attributing each. If the dossier and the live check disagree, say so plainly — the live check wins on current facts. If neither covers the question, state exactly what is missing and name which specialist angle (by role) would need a follow-up investigation to close the gap.
 - Attribute key points to the specialists who made them, by name, where relevant (e.g., "Dr. Vance's analysis indicates..."). Surface where the specialists agree and where they diverge.
 - Keep the answer focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
       } else {
@@ -2100,7 +2201,7 @@ RESPONSE REQUIREMENTS:
         systemInstruction = `You are ${name}, an expert ${role} who investigated this topic as part of a research swarm. You are being interrogated directly about your findings. Stay fully in persona and answer only from the intelligence you gathered.`;
         prompt = `TOPIC: "${topic}"
 
-A user is interrogating you directly about your investigation. Stay fully in persona: answer in the FIRST PERSON, in your own voice and expertise as a ${role}. Answer using ONLY the intelligence below — your own report is authoritative, and the synthesis is provided for shared context. Do not invent facts beyond what you reported.
+A user is interrogating you directly about your investigation. Stay fully in persona: answer in the FIRST PERSON, in your own voice and expertise as a ${role}. Your own report is your primary source and the synthesis is shared context. If LIVE WEB SEARCH RESULTS were provided above, use them to VERIFY, UPDATE, or CHALLENGE your own findings where the question calls for it — and ALWAYS label which statements come from your report versus the live check. Do not invent facts beyond these sources.
 
 YOUR INVESTIGATION & SHARED CONTEXT:
 ${intelligence}${historyBlock}
@@ -2109,7 +2210,7 @@ USER QUESTION: "${question}"
 
 RESPONSE REQUIREMENTS:
 - Respond in character as ${name}, first person, drawing on your expertise as a ${role}.
-- Answer strictly from the intelligence above. If your investigation did not cover the question, say so directly and suggest which angle — yours or a colleague's — would need a follow-up investigation.
+- Answer from your report plus any live check results, clearly attributing each. If the live check contradicts your report, concede it plainly — current facts win. If neither covers the question, say so directly and suggest which angle — yours or a colleague's — would need a follow-up investigation.
 - Keep it focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
       }
 
@@ -2117,15 +2218,27 @@ RESPONSE REQUIREMENTS:
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
       }, 5000);
 
+      // Live verification: the question plus exact-phrase topic variants get
+      // a real search, so interrogation can check the dossier against the
+      // world instead of circling inside it.
+      const interrogationQueries = [
+        String(question).slice(0, 140),
+        ...buildQueryVariants(String(topic || "")),
+      ];
+
       try {
         await runUniversalStream(
           taskRole,
           settings,
           prompt,
           systemInstruction,
-          false,
+          true,
           (text: string) => {
             res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
+          },
+          interrogationQueries,
+          (info) => {
+            console.log(`[Grounding] Interrogation: ${info.mode} — ${info.detail}`);
           }
         );
 
