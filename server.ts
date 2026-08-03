@@ -899,7 +899,10 @@ async function runUniversalStream(
   hasSearch: boolean,
   onChunk: (text: string) => void,
   searchQueries?: string[],
-  onGrounding?: (info: GroundingInfo) => void
+  onGrounding?: (info: GroundingInfo) => void,
+  // Opt-in two-wave iterative deepening. Only full agent investigations set
+  // this; interrogation answers stay single-wave for responsiveness.
+  deepenSearch?: boolean
 ): Promise<void> {
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
@@ -911,9 +914,7 @@ async function runUniversalStream(
   if (hasSearch) {
     try {
       const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
-      // Agent investigations get the two-wave deepening pass; lighter tasks
-      // (interrogation answers) stay single-wave for responsiveness.
-      const refiner = taskRole === "agent"
+      const refiner = deepenSearch
         ? (digest: string, alreadyRun: string[]) => refineQueriesFromResults(settings, digest, alreadyRun)
         : undefined;
       const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner);
@@ -1758,7 +1759,8 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
           (info) => {
             console.log(`[Grounding] ${agent.name}: ${info.mode} — ${info.detail}`);
             res.write(`data: ${JSON.stringify({ type: "grounding", mode: info.mode, detail: info.detail })}\n\n`);
-          }
+          },
+          true
         );
 
         clearInterval(pingInterval);
