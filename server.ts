@@ -476,14 +476,17 @@ const FULL_PAGE_EXTRACT_COUNT = 10;
 // and text-extracted so agents read complete articles instead of snippets,
 // and the block states exactly which queries were executed so agents can
 // report methodology honestly.
-async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number; engine: string; pages: number }> {
+async function gatherLiveContext(
+  queries: string[],
+  refine?: (digest: string, alreadyRun: string[]) => Promise<string[]>
+): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
-  const engines: { name: string; enabled: boolean; jobs: () => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
+  const engines: { name: string; enabled: boolean; jobsFor: (qs: string[]) => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
     {
       name: "SearXNG",
       enabled: true,
-      jobs: () => uniqueQueries.flatMap((q) => [
+      jobsFor: (qs) => qs.flatMap((q) => [
         { query: q, run: () => searxngSearch(q, 10) },
         { query: q, run: () => searxngSearch(q, 10, "news") },
       ]),
@@ -491,41 +494,72 @@ async function gatherLiveContext(queries: string[]): Promise<{ block: string; hi
     {
       name: "Brave",
       enabled: !!BRAVE_SEARCH_API_KEY,
-      jobs: () => uniqueQueries.map((q) => ({ query: q, run: () => braveSearch(q) })),
+      jobsFor: (qs) => qs.map((q) => ({ query: q, run: () => braveSearch(q) })),
     },
     {
       name: "Tavily",
       enabled: !!TAVILY_API_KEY,
-      jobs: () => uniqueQueries.map((q) => ({ query: q, run: () => tavilySearch(q) })),
+      jobsFor: (qs) => qs.map((q) => ({ query: q, run: () => tavilySearch(q) })),
     },
   ];
 
   for (const engine of engines) {
     if (!engine.enabled) continue;
-    const jobs = engine.jobs();
     const seen = new Set<string>();
     const hits: SearchHit[] = [];
     const perQuery = new Map<string, number>();
-    const settled = await Promise.allSettled(jobs.map((j) => j.run()));
-    settled.forEach((result, idx) => {
-      const job = jobs[idx];
-      if (result.status !== "fulfilled") {
-        console.warn(`[Grounding] ${engine.name} query failed ("${job.query.slice(0, 60)}"): ${result.reason?.message || result.reason}`);
-        return;
+
+    const runWave = async (waveQueries: string[]) => {
+      const jobs = engine.jobsFor(waveQueries);
+      const settled = await Promise.allSettled(jobs.map((j) => j.run()));
+      settled.forEach((result, idx) => {
+        const job = jobs[idx];
+        if (result.status !== "fulfilled") {
+          console.warn(`[Grounding] ${engine.name} query failed ("${job.query.slice(0, 60)}"): ${result.reason?.message || result.reason}`);
+          return;
+        }
+        perQuery.set(job.query, (perQuery.get(job.query) || 0) + result.value.length);
+        for (const hit of result.value) {
+          if (!hit.url || seen.has(hit.url)) continue;
+          seen.add(hit.url);
+          hits.push(hit);
+        }
+      });
+    };
+
+    // Wave 1 — landscape survey.
+    await runWave(uniqueQueries);
+
+    // Wave 2 — iterative deepening: queries written FROM what wave 1 actually
+    // returned (chase discovered entities, hunt counter-evidence, fill gaps).
+    let allQueries = [...uniqueQueries];
+    let waves = 1;
+    if (refine && hits.length > 0) {
+      try {
+        const digest = rankHits(hits, uniqueQueries)
+          .slice(0, 15)
+          .map((h) => `- ${h.title} :: ${h.snippet.slice(0, 160)}`)
+          .join("\n");
+        const followups = (await refine(digest, uniqueQueries))
+          .map((q) => q.trim())
+          .filter((q) => q && !allQueries.some((prev) => prev.toLowerCase() === q.toLowerCase()))
+          .slice(0, 6);
+        if (followups.length > 0) {
+          console.log(`[Grounding] Wave 2 (${engine.name}): ${followups.map((q) => `"${q}"`).join(" | ")}`);
+          await runWave(followups);
+          allQueries = [...allQueries, ...followups];
+          waves = 2;
+        }
+      } catch (err: any) {
+        console.warn(`[Grounding] Wave 2 refinement failed: ${err?.message || err}`);
       }
-      perQuery.set(job.query, (perQuery.get(job.query) || 0) + result.value.length);
-      for (const hit of result.value) {
-        if (!hit.url || seen.has(hit.url)) continue;
-        seen.add(hit.url);
-        hits.push(hit);
-      }
-    });
+    }
 
     if (hits.length > 0) {
-      const ranked = rankHits(hits, uniqueQueries).slice(0, 40);
+      const ranked = rankHits(hits, allQueries).slice(0, 40);
       const today = new Date().toISOString().slice(0, 10);
-      const queryLines = uniqueQueries
-        .map((q) => `- "${q}" (${perQuery.get(q) || 0} raw hits)`)
+      const queryLines = allQueries
+        .map((q, i) => `- [wave ${i < uniqueQueries.length ? 1 : 2}] "${q}" (${perQuery.get(q) || 0} raw hits)`)
         .join("\n");
       const lines = ranked.map(
         (h, i) => `[${i + 1}] ${h.title}${h.publishedDate ? ` (published ${h.publishedDate})` : ""}\n    URL: ${h.url}\n    ${h.snippet}`
@@ -547,16 +581,59 @@ async function gatherLiveContext(queries: string[]): Promise<{ block: string; hi
         : "";
 
       const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} UTC via ${engine.name} — current, real-world data)
+Searched in ${waves === 2 ? "TWO waves: a landscape survey, then a deepening wave whose queries were written from what the first wave actually returned" : "a single landscape wave"}.
 Queries the research system executed on your behalf (these are the ONLY searches run for you):
 ${queryLines}
 
 Results (deduplicated, relevance-ranked):
 ${lines.join("\n")}${extractsSection}`;
-      return { block, hitCount: ranked.length, engine: engine.name, pages: extracts.length };
+      return { block, hitCount: ranked.length, engine: engine.name, pages: extracts.length, waves };
     }
     console.warn(`[Grounding] ${engine.name} returned no hits${engine.name === "SearXNG" ? ` (${SEARXNG_BASE_URL})` : ""} — trying next engine.`);
   }
-  return { block: "", hitCount: 0, engine: "none", pages: 0 };
+  return { block: "", hitCount: 0, engine: "none", pages: 0, waves: 0 };
+}
+
+// Iterative deepening (k-deep-research "progressive refinement"): wave 2's
+// queries are written FROM wave 1's actual results — chasing the specific
+// entities that surfaced, hunting counter-evidence, and filling visible gaps.
+async function refineQueriesFromResults(
+  settings: any,
+  digest: string,
+  alreadyRun: string[]
+): Promise<string[]> {
+  const schema = {
+    type: Type.OBJECT,
+    properties: {
+      queries: { type: Type.ARRAY, description: "4-6 follow-up search queries", items: { type: Type.STRING } },
+    },
+    required: ["queries"],
+  };
+  const prompt = `A first wave of web searches has returned. Your job is to write the SECOND wave.
+
+QUERIES ALREADY RUN (do not repeat these):
+${alreadyRun.map((q) => `- ${q}`).join("\n")}
+
+WHAT WAVE 1 RETURNED (titles :: snippets):
+${digest}
+
+Write 4-6 NEW search queries that deepen this investigation. Mandatory coverage:
+- CHASE SPECIFICS: name the concrete entities that actually appeared above — people, organizations, documents, products, place names, dates, case numbers — and search for them directly.
+- HUNT COUNTER-EVIDENCE: at least one query aimed at critique, rebuttal, debunking, or the dissenting view of the dominant claim above.
+- FOLLOW THE INCENTIVE: at least one query about who funds, benefits from, or is harmed by the dominant narrative above.
+- FILL THE GAP: target what wave 1 conspicuously did NOT answer.
+Each query is a tight search-engine string of 2-8 words, not a sentence or question. Return only JSON: {"queries": ["...", "..."]}.`;
+
+  const result = await generateUnifiedJSON(
+    "orchestrator",
+    settings,
+    prompt,
+    "You are a research query strategist running the deepening pass of an investigation. Output only the JSON object.",
+    schema
+  );
+  return Array.isArray(result?.queries)
+    ? result.queries.filter((q: any) => typeof q === "string" && q.trim()).map((q: string) => q.trim().slice(0, 140))
+    : [];
 }
 
 export interface GroundingInfo {
@@ -716,7 +793,8 @@ ASSIGNED INVESTIGATIVE ANGLE: "${angle.slice(0, 600)}"
 Generate 4-6 concrete web search queries for this investigation. Rules:
 - CONCRETIZE. Name specific entities — facilities, programs, products, people, organizations, documents — that this investigation should check. Include well-known real-world examples YOU know of that fit the topic's pattern, even when the topic text does not name them. An abstract mandate hides concrete anchors; your job is to surface them.
 - Each query is a tight search-engine string (2-8 words), not a sentence or a question.
-- Queries must not overlap heavily with each other.${fringe ? `
+- Queries must not overlap heavily with each other.
+- COVER DISTINCT ANGLES, not just topical restatements. Across the set, include at least one query hunting CRITIQUE / rebuttal / debate / counter-evidence on the central claim, and at least one probing INCENTIVE — who funds, profits from, or is harmed by the dominant position.${fringe ? `
 - This is a FRINGE case-file investigation. THINK LIKE A VETERAN FRINGE RESEARCHER: draw on your knowledge of the esoteric/occult canon (Sumerian, Hermetic, alchemical, Thelemic, modern conspiracy-research literature), known symbol and codename lineages, classified-program insignia lore, and famous prior cases in this territory. Name the canonical anchors — specific facilities, program names, texts, researchers, incidents — that a fringe veteran would immediately check for this mandate.
 - Include one query using site:archive.org and one aimed at declassified/FOIA material where relevant.` : ""}`;
 
@@ -833,7 +911,12 @@ async function runUniversalStream(
   if (hasSearch) {
     try {
       const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
-      const { block, hitCount, engine, pages } = await gatherLiveContext(queries);
+      // Agent investigations get the two-wave deepening pass; lighter tasks
+      // (interrogation answers) stay single-wave for responsiveness.
+      const refiner = taskRole === "agent"
+        ? (digest: string, alreadyRun: string[]) => refineQueriesFromResults(settings, digest, alreadyRun)
+        : undefined;
+      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner);
       if (hitCount > 0) {
         const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
           ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
@@ -843,7 +926,7 @@ ${noOwnSearch}
 - NEVER claim to have searched, queried, or checked any engine, database, or source yourself. If your report includes a methodology section, it must describe exactly the queries listed above and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
 - Ground every time-sensitive claim in the numbered results and cite them inline with their URLs. Where the results do not cover a point, write "the provided live results do not cover this" — do not fill the gap with memorized training data presented as current.
 - Result dates may differ from your stated date by up to a day due to timezones. That is normal publishing skew, not an anomaly — do not build theories on it.`;
-        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results + ${pages} full-page extracts injected via ${engine} — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
+        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results + ${pages} full-page extracts injected via ${engine} across ${waves} search wave${waves === 1 ? "" : "s"} — seed queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
       } else {
         prompt = `${prompt}\n\nWARNING — LIVE SEARCH UNAVAILABLE (a tooling failure, NOT a reflection on the topic): no live web data could be retrieved for this run. You MUST state this plainly at the top of your report. Your training data may predate recent events, so NEVER declare that something "does not exist" or that there is "no evidence" of it based on memory alone — recent products, events, and coverage may simply postdate your knowledge. Write "live verification was unavailable this run" instead, flag memory-based findings as potentially outdated, and date-stamp any claim that could have changed.`;
         onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL}${BRAVE_SEARCH_API_KEY ? " + Brave" : ""}${TAVILY_API_KEY ? " + Tavily" : ""} returned no results) — falling back to model knowledge` });
@@ -1545,7 +1628,14 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       // prefer live web findings over memory, and must cite sources.
       const today = new Date().toDateString();
       const datePreamble = `Today's date is ${today} (local server time; UTC may differ by up to a day, so source timestamps within a day of this date are normal, not anomalies). Your training data predates this — treat live web information as authoritative over memorized knowledge, and date-stamp any claim that could have changed since your training.`;
-      const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge. Absence from your training data is NEVER evidence of absence — do not declare a subject nonexistent or "without evidence" unless live search actually returned nothing relevant, and even then write "live search returned no coverage of this" rather than asserting it does not exist.`;
+      const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge. Absence from your training data is NEVER evidence of absence — do not declare a subject nonexistent or "without evidence" unless live search actually returned nothing relevant, and even then write "live search returned no coverage of this" rather than asserting it does not exist.
+
+EVIDENCE DISCIPLINE (mandatory):
+- SCORE YOUR SOURCES inline on a 0-10 credibility scale (10 = official records, primary documents, peer-reviewed; 8-9 = credentialed experts, institutional sources; 5-7 = reputable journalism, cited technical writing; 3-4 = uncited claims, opinion; 0-2 = known-unreliable or contradicted by primary evidence). Write it inline with the FULL URL, e.g. "(Reuters, https://www.reuters.com/world/example-article, 8/10)" — a bare domain is not a citation; every cited source needs a resolvable link.
+- TRIANGULATE: a claim confirmed by independent sources is stronger than one echoed by sources citing each other. State which you have, and flag single-source claims as single-source.
+- SEEK CONTRADICTION: actively report evidence cutting AGAINST your own emerging conclusion. A report with no counter-evidence is incomplete.
+- FOLLOW THE INCENTIVE: where a claim is contested, note who funds, profits from, or is harmed by each position.
+- PRESERVE UNCERTAINTY: separate what is established, what is contested, and what is unknown. Do not force a verdict the evidence does not support.`;
 
       let prompt: string;
       if (depth === "recon") {
@@ -1558,6 +1648,7 @@ Structure your response with Markdown:
 - A brief 'Role Perspective' (2-3 sentences on how a ${agent.role} frames this issue).
 - 'Key Findings' as a set of tight, information-rich bullet points.
 - 'Critical Insights' capturing the 2-4 most consequential takeaways.
+- 'Counter-Evidence & Gaps' — what cuts against your conclusion, what remains contested, and any query that came back empty.
 
 Ground your points in the live web intelligence available to you this run and cite sources. Write in your persona, first person. Prioritize precision over volume.`;
       } else if (depth === "deep") {
@@ -1571,6 +1662,7 @@ Structure your response beautifully with Markdown:
 - Include a 'Role Perspective' section detailing how a ${agent.role} uniquely views this issue.
 - Include 'Detailed Findings' with robust analysis, structured points, data, and technical breakdowns.
 - Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
+- Include 'Counter-Evidence & Contested Ground' — evidence cutting against your own conclusion, unresolved disputes, who benefits from each position, and any search that came back empty.
 - Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
 DEEP-ANALYSIS REQUIREMENTS (mandatory):
@@ -1592,6 +1684,7 @@ Structure your response beautifully with Markdown:
 - Include a 'Role Perspective' section detailing how a ${agent.role} uniquely views this issue.
 - Include 'Detailed Findings' with robust analysis, structured points, data, and technical breakdowns.
 - Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
+- Include 'Counter-Evidence & Contested Ground' — evidence cutting against your own conclusion, unresolved disputes, who benefits from each position, and any search that came back empty.
 - Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
 Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST 2,500-4,000 words — a floor, not a ceiling. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
