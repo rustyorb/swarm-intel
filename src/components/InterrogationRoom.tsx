@@ -127,7 +127,10 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
           agents: reportAgents,
           synthesizedReport: session.synthesizedReport || "",
           chatHistory: baseMessages.map(m => ({ role: m.role, speaker: m.respondentName, content: m.content })),
-          settings,
+          // A directly-interrogated specialist answers with its assigned model.
+          settings: respondentAgent?.modelOverride
+            ? { ...settings, modelMapping: { ...settings.modelMapping, agent: respondentAgent.modelOverride } }
+            : settings,
         }),
       });
 
@@ -295,7 +298,10 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
               opponents: participants.filter((p) => p.id !== agent.id).map((p) => ({ name: p.name, role: p.role })),
               synthesizedReport: session.synthesizedReport || "",
               transcript,
-              settings,
+              // Each debater takes the floor with its assigned model.
+              settings: agent.modelOverride
+                ? { ...settings, modelMapping: { ...settings.modelMapping, agent: agent.modelOverride } }
+                : settings,
               round,
               totalRounds: debateRounds,
             }),

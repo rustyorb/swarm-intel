@@ -789,6 +789,22 @@ export default function App() {
     }, 0);
   };
 
+  // Per-agent model assignment from the approval screen. "auto" clears the
+  // override so the global agent mapping applies.
+  const setAgentModelOverride = (agentId: string, value: string) => {
+    setSession(prev => {
+      if (!prev) return null;
+      let override: Agent["modelOverride"];
+      if (value !== "auto") {
+        const sep = value.indexOf("|||");
+        if (sep > 0) override = { provider: value.slice(0, sep), model: value.slice(sep + 3) };
+      }
+      return { ...prev, agents: prev.agents.map(a => (a.id === agentId ? { ...a, modelOverride: override } : a)) };
+    });
+  };
+
+  const shortModelName = (m: string) => (m || "").split("/").pop() || m;
+
   const handleDismissAgent = (agentId: string) => {
     if (!session || session.agents.length <= 2) return;
     const target = session.agents.find(a => a.id === agentId);
@@ -1153,14 +1169,14 @@ export default function App() {
   const handleLaunchFollowUp = (directive: string) => {
     if (!session || !directive.trim()) return;
     const chatExcerpt = (session.chat ?? [])
-      .slice(-8)
-      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 500)}`)
+      .slice(-12)
+      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 800)}`)
       .join("\n");
     const prior: PriorContext = {
       parentSessionId: session.id,
       parentTopic: session.topic,
       directive: directive.trim(),
-      synthesis: (session.synthesizedReport || "").slice(0, 9000),
+      synthesis: (session.synthesizedReport || "").slice(0, 18000),
       chatExcerpt,
       // Fringe case files pass their ledger forward so the follow-up swarm
       // works the open leads instead of restarting the case.
@@ -1177,14 +1193,14 @@ export default function App() {
     if (!watched.synthesizedReport) return; // nothing settled to diff against
     const directive = `Delta sweep as of ${new Date().toDateString()}: what has changed regarding "${watched.topic}" since ${watched.timestamp}? Focus exclusively on new developments, corrections, and anything that confirms or overturns the prior findings.`;
     const chatExcerpt = (watched.chat ?? [])
-      .slice(-8)
-      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 500)}`)
+      .slice(-12)
+      .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 800)}`)
       .join("\n");
     const prior: PriorContext = {
       parentSessionId: watched.id,
       parentTopic: watched.topic,
       directive,
-      synthesis: (watched.synthesizedReport || "").slice(0, 9000),
+      synthesis: (watched.synthesizedReport || "").slice(0, 18000),
       chatExcerpt,
       delta: true,
       // Fringe case files still pass their ledger forward on a sweep.
@@ -1271,7 +1287,17 @@ export default function App() {
         const response = await fetch("/api/research/agent-run-stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: currentSession.topic, agent, settings: settings, config: currentSession.config, priorContext: currentSession.priorContext }),
+          body: JSON.stringify({
+            topic: currentSession.topic,
+            agent,
+            // Per-agent model override rides in via the settings mapping, so
+            // the server needs no special handling.
+            settings: agent.modelOverride
+              ? { ...settings, modelMapping: { ...settings.modelMapping, agent: agent.modelOverride } }
+              : settings,
+            config: currentSession.config,
+            priorContext: currentSession.priorContext
+          }),
         });
 
         if (!response.ok) {
@@ -2464,7 +2490,6 @@ export default function App() {
                     );
                   }
 
-                  const modelBadge = getAgentModelBadge(colorTheme);
                   const tags = getAgentTags(agent.role);
                   const sheet = getAgentSheet(agent.name, agent.role);
 
@@ -2553,10 +2578,35 @@ export default function App() {
                         </p>
                       </div>
 
-                      {/* Engine line */}
-                      <div className="flex items-center gap-2 px-4 mt-3">
+                      {/* Engine line — real per-node model assignment */}
+                      <div className="flex items-center gap-2 px-4 mt-3" onClick={(e) => e.stopPropagation()}>
                         <span className="rpg-label">CORE</span>
-                        <span className="rpg-stat-value uppercase">{modelBadge}</span>
+                        {session.status === "approval" ? (
+                          <select
+                            value={agent.modelOverride ? `${agent.modelOverride.provider}|||${agent.modelOverride.model}` : "auto"}
+                            onChange={(e) => setAgentModelOverride(agent.id, e.target.value)}
+                            className="flex-1 min-w-0 bg-bg-primary border border-border-warm rounded-md px-1.5 py-0.5 text-[9px] font-mono text-text-secondary focus:outline-none focus:border-accent-warm/50 cursor-pointer"
+                            title="Assign a model to this node (AUTO uses the global agent mapping from Settings)"
+                          >
+                            <option value="auto">AUTO — {shortModelName(settings.modelMapping.agent.model)}</option>
+                            {Object.entries(settings.providers)
+                              .filter(([, p]: [string, any]) => p.enabled && p.fetchedModels.length > 0)
+                              .map(([provName, p]: [string, any]) => (
+                                <optgroup key={provName} label={provName.toUpperCase()}>
+                                  {p.fetchedModels.map((m: string) => (
+                                    <option key={provName + m} value={`${provName}|||${m}`}>{shortModelName(m)}</option>
+                                  ))}
+                                </optgroup>
+                              ))}
+                          </select>
+                        ) : (
+                          <span
+                            className="rpg-stat-value uppercase truncate"
+                            title={agent.modelOverride ? `${agent.modelOverride.provider}: ${agent.modelOverride.model}` : `Global agent model: ${settings.modelMapping.agent.model}`}
+                          >
+                            {shortModelName(agent.modelOverride?.model || settings.modelMapping.agent.model)}
+                          </span>
+                        )}
                       </div>
 
                       {/* Progress and Tags Indicator at bottom */}

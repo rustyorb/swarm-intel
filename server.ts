@@ -414,14 +414,69 @@ async function tavilySearch(query: string, maxResults = 8): Promise<SearchHit[]>
   }
 }
 
+// Crude but dependency-free HTML→text extraction for full-article reading.
+// Good enough to hand a model the body text of a news article or blog post.
+function htmlToText(html: string): string {
+  let s = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(nav|header|footer|aside|form)[\s\S]*?<\/\1>/gi, " ");
+  s = s.replace(/<(br|p|div|li|h[1-6]|tr|section|article)[^>]*>/gi, "\n");
+  s = s.replace(/<[^>]+>/g, " ");
+  s = s
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&#\d+;/g, " ");
+  return s.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").replace(/\n{2,}/g, "\n").trim();
+}
+
+async function fetchPageExtract(url: string, maxChars = 6000): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SwarmIntel/1.0 research assistant",
+        "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+      },
+    });
+    if (!response.ok) return null;
+    const ctype = response.headers.get("content-type") || "";
+    if (!ctype.includes("text/html") && !ctype.includes("text/plain") && !ctype.includes("application/xhtml")) return null;
+    const raw = (await response.text()).slice(0, 600_000);
+    const text = ctype.includes("text/plain") ? raw : htmlToText(raw);
+    // Paywalls and JS shells extract to almost nothing — not worth injecting.
+    if (text.length < 300) return null;
+    return text.slice(0, maxChars);
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// How many top-ranked pages get fetched and text-extracted per grounding run.
+// Generous by design — local models with 1M+ contexts thrive on more.
+const FULL_PAGE_EXTRACT_COUNT = 10;
+
 // Runs all queries in parallel against an engine chain — SearXNG first (free,
 // aggregates many engines; queried in BOTH the general and news categories,
 // because the general category's engine soup buries current events that the
 // news category surfaces cleanly), then any configured API fallbacks. The
 // first engine that returns hits wins; `engine` reports which one grounded
-// the run. Hits are relevance-ranked and the block states exactly which
-// queries were executed so agents can report methodology honestly.
-async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number; engine: string }> {
+// the run. Hits are relevance-ranked, the top few pages are fetched in full
+// and text-extracted so agents read complete articles instead of snippets,
+// and the block states exactly which queries were executed so agents can
+// report methodology honestly.
+async function gatherLiveContext(queries: string[]): Promise<{ block: string; hitCount: number; engine: string; pages: number }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
   const engines: { name: string; enabled: boolean; jobs: () => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
@@ -467,7 +522,7 @@ async function gatherLiveContext(queries: string[]): Promise<{ block: string; hi
     });
 
     if (hits.length > 0) {
-      const ranked = rankHits(hits, uniqueQueries).slice(0, 20);
+      const ranked = rankHits(hits, uniqueQueries).slice(0, 40);
       const today = new Date().toISOString().slice(0, 10);
       const queryLines = uniqueQueries
         .map((q) => `- "${q}" (${perQuery.get(q) || 0} raw hits)`)
@@ -475,17 +530,33 @@ async function gatherLiveContext(queries: string[]): Promise<{ block: string; hi
       const lines = ranked.map(
         (h, i) => `[${i + 1}] ${h.title}${h.publishedDate ? ` (published ${h.publishedDate})` : ""}\n    URL: ${h.url}\n    ${h.snippet}`
       );
+
+      // Full-article reading: fetch the top-ranked pages and hand the agent
+      // real body text, not just search snippets.
+      const toFetch = ranked.slice(0, FULL_PAGE_EXTRACT_COUNT);
+      const extractResults = await Promise.allSettled(toFetch.map((h) => fetchPageExtract(h.url)));
+      const extracts: string[] = [];
+      extractResults.forEach((result, idx) => {
+        if (result.status === "fulfilled" && result.value) {
+          extracts.push(`=== FULL TEXT of [${idx + 1}] ${toFetch[idx].title}\n    URL: ${toFetch[idx].url}\n${result.value}`);
+        }
+      });
+
+      const extractsSection = extracts.length > 0
+        ? `\n\nFULL SOURCE EXTRACTS (complete body text fetched from the top-ranked sources — quote and verify against THESE, not just the snippets):\n${extracts.join("\n\n")}`
+        : "";
+
       const block = `LIVE WEB SEARCH RESULTS (retrieved ${today} UTC via ${engine.name} — current, real-world data)
 Queries the research system executed on your behalf (these are the ONLY searches run for you):
 ${queryLines}
 
 Results (deduplicated, relevance-ranked):
-${lines.join("\n")}`;
-      return { block, hitCount: ranked.length, engine: engine.name };
+${lines.join("\n")}${extractsSection}`;
+      return { block, hitCount: ranked.length, engine: engine.name, pages: extracts.length };
     }
     console.warn(`[Grounding] ${engine.name} returned no hits${engine.name === "SearXNG" ? ` (${SEARXNG_BASE_URL})` : ""} — trying next engine.`);
   }
-  return { block: "", hitCount: 0, engine: "none" };
+  return { block: "", hitCount: 0, engine: "none", pages: 0 };
 }
 
 export interface GroundingInfo {
@@ -502,8 +573,8 @@ export interface GroundingInfo {
 
 function formatPriorContextBlock(priorContext: any): string {
   if (!priorContext || typeof priorContext !== "object") return "";
-  const synthesis = String(priorContext.synthesis || "").slice(0, 12000);
-  const chatExcerpt = String(priorContext.chatExcerpt || "").slice(0, 4000);
+  const synthesis = String(priorContext.synthesis || "").slice(0, 24000);
+  const chatExcerpt = String(priorContext.chatExcerpt || "").slice(0, 8000);
   const directive = String(priorContext.directive || "").trim();
   const parentTopic = String(priorContext.parentTopic || "").trim();
   if (!synthesis && !directive) return "";
@@ -714,7 +785,7 @@ async function generateUnifiedJSON(
     const result = await callAnthropic(apiKey, {
       model,
       messages: [{ role: "user", content: fullPrompt }],
-      max_tokens: 4000
+      max_tokens: 8000
     });
     responseText = result.content?.[0]?.text || "";
   } else {
@@ -754,13 +825,15 @@ async function runUniversalStream(
 ): Promise<void> {
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
-  // Providers without native search get live SearXNG results injected into
-  // the prompt; if that fails the model is told to caveat staleness instead
-  // of silently roleplaying a web search it never ran.
-  if (hasSearch && !AGENTIC_SEARCH_PROVIDERS.has(provider)) {
+  // Local SearXNG grounding is the workhorse for EVERY provider — native
+  // search tools (Gemini/Anthropic/plugins) ride on top as a bonus, but the
+  // injected block guarantees each agent real, ranked, full-text sources.
+  // If gathering fails the model is told to caveat staleness instead of
+  // silently roleplaying a web search it never ran.
+  if (hasSearch) {
     try {
       const queries = searchQueries && searchQueries.length > 0 ? searchQueries : [prompt.slice(0, 200)];
-      const { block, hitCount, engine } = await gatherLiveContext(queries);
+      const { block, hitCount, engine, pages } = await gatherLiveContext(queries);
       if (hitCount > 0) {
         const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
           ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
@@ -770,7 +843,7 @@ ${noOwnSearch}
 - NEVER claim to have searched, queried, or checked any engine, database, or source yourself. If your report includes a methodology section, it must describe exactly the queries listed above and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
 - Ground every time-sensitive claim in the numbered results and cite them inline with their URLs. Where the results do not cover a point, write "the provided live results do not cover this" — do not fill the gap with memorized training data presented as current.
 - Result dates may differ from your stated date by up to a day due to timezones. That is normal publishing skew, not an anomaly — do not build theories on it.`;
-        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results injected via ${engine} (${provider} has no native web search) — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
+        onGrounding?.({ mode: "injected", detail: `${hitCount} live search results + ${pages} full-page extracts injected via ${engine} — queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
       } else {
         prompt = `${prompt}\n\nWARNING — LIVE SEARCH UNAVAILABLE (a tooling failure, NOT a reflection on the topic): no live web data could be retrieved for this run. You MUST state this plainly at the top of your report. Your training data may predate recent events, so NEVER declare that something "does not exist" or that there is "no evidence" of it based on memory alone — recent products, events, and coverage may simply postdate your knowledge. Write "live verification was unavailable this run" instead, flag memory-based findings as potentially outdated, and date-stamp any claim that could have changed.`;
         onGrounding?.({ mode: "none", detail: `Live search unavailable (SearXNG at ${SEARXNG_BASE_URL}${BRAVE_SEARCH_API_KEY ? " + Brave" : ""}${TAVILY_API_KEY ? " + Tavily" : ""} returned no results) — falling back to model knowledge` });
@@ -780,9 +853,11 @@ ${noOwnSearch}
       prompt = `${prompt}\n\nWARNING: No live web data could be retrieved for this run. You must explicitly flag that your findings come from model training data and may be outdated, and date-stamp any claim that could have changed.`;
       onGrounding?.({ mode: "none", detail: `Live search failed (${err.message}) — falling back to model knowledge` });
     }
-  } else if (hasSearch) {
-    // Native-search providers run real queries — but hold them to the same
-    // honesty bar: report only searches actually executed.
+  }
+
+  // Providers with genuinely agentic native search also run their own real
+  // queries on top of the injected block — hold them to the same honesty bar.
+  if (hasSearch && AGENTIC_SEARCH_PROVIDERS.has(provider)) {
     prompt = `${prompt}\n\nSEARCH HONESTY (mandatory): Run real queries with your web search tool and cite the actual results. Never describe a search you did not actually execute this run, and never report a null for a query you did not run — if a real query returned nothing, quote that exact query. Result dates may differ from your stated date by up to a day due to timezones; that is normal, not an anomaly.`;
   }
 
@@ -824,7 +899,7 @@ ${noOwnSearch}
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: `${systemInstruction}\n\n${prompt}` }],
-        max_tokens: hasSearch ? 8000 : 4000,
+        max_tokens: hasSearch ? 16000 : 8000,
         ...(hasSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }] } : {}),
         stream: true
       })
@@ -2163,7 +2238,7 @@ Every claim needs at least one supporter or disputer. Cover the breadth of the r
           .map((a: any) => `## SPECIALIST REPORT — ${a.name} (${a.role})\nInvestigative angle: ${a.investigativeAngle || "n/a"}\n\n${a.report}`)
           .join("\n\n---\n\n");
       } else {
-        intelligence += `## CONSOLIDATED SYNTHESIS (shared context)\n${(synthesizedReport || "(no synthesis available)").slice(0, 4000)}\n\n`;
+        intelligence += `## CONSOLIDATED SYNTHESIS (shared context)\n${(synthesizedReport || "(no synthesis available)").slice(0, 8000)}\n\n`;
         if (targetAgent) {
           intelligence += `## YOUR OWN FULL REPORT — ${targetAgent.name} (${targetAgent.role})\nInvestigative angle: ${targetAgent.investigativeAngle || "n/a"}\n\n${targetAgent.report || "(no report on file)"}`;
         }
@@ -2193,7 +2268,7 @@ USER QUESTION: "${question}"
 RESPONSE REQUIREMENTS:
 - Answer from the dossier plus any live check results, clearly attributing each. If the dossier and the live check disagree, say so plainly — the live check wins on current facts. If neither covers the question, state exactly what is missing and name which specialist angle (by role) would need a follow-up investigation to close the gap.
 - Attribute key points to the specialists who made them, by name, where relevant (e.g., "Dr. Vance's analysis indicates..."). Surface where the specialists agree and where they diverge.
-- Keep the answer focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
+- Keep the answer focused and high-signal: roughly 500-1200 words in clean, standard Markdown.`;
       } else {
         taskRole = "agent";
         const name = targetAgent?.name || "Specialist";
@@ -2211,7 +2286,7 @@ USER QUESTION: "${question}"
 RESPONSE REQUIREMENTS:
 - Respond in character as ${name}, first person, drawing on your expertise as a ${role}.
 - Answer from your report plus any live check results, clearly attributing each. If the live check contradicts your report, concede it plainly — current facts win. If neither covers the question, say so directly and suggest which angle — yours or a colleague's — would need a follow-up investigation.
-- Keep it focused and high-signal: roughly 300-600 words in clean, standard Markdown.`;
+- Keep it focused and high-signal: roughly 500-1200 words in clean, standard Markdown.`;
       }
 
       const pingInterval = setInterval(() => {
@@ -2304,7 +2379,7 @@ YOUR OWN FULL REPORT (your authoritative evidence base):
 ${String(speaker.report || "(no report on file)").slice(0, 14000)}
 
 CONSOLIDATED SYNTHESIS (shared context):
-${String(synthesizedReport || "(none)").slice(0, 4000)}
+${String(synthesizedReport || "(none)").slice(0, 8000)}
 
 DEBATE TRANSCRIPT SO FAR:
 ${transcriptBlock}

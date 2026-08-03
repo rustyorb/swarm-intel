@@ -12,6 +12,9 @@ export interface Agent {
   // How this agent's run was web-grounded: native provider search, injected
   // SearXNG results, or none (model memory only — treat findings as stale).
   grounding?: { mode: "native" | "injected" | "none"; detail: string };
+  // Per-agent model assignment chosen at the approval screen; when unset the
+  // global agent model mapping applies.
+  modelOverride?: { provider: string; model: string };
 }
 
 export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "redteaming" | "synthesizing" | "completed" | "failed";
