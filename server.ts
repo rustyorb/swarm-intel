@@ -1383,6 +1383,7 @@ Work in two phases.
 
 PHASE 1 — ANALYZE THE RESEARCH NEED (this drives everything else):
 Before thinking about any team, diagnose what this request actually requires:
+- Separate the PRIMARY QUESTION from supporting CONTEXT. The primary question is what the user wants ANSWERED (the pick, the ranking, the verdict, the explanation). Context — hardware specs, budgets, locations, deadlines, exclusions — merely constrains and calibrates that answer. State both explicitly in your analysis.
 - What kind of question is it (technical evaluation, market scan, product comparison, historical inquiry, scientific review, investigation of a person/organization/event, local or situational lookup, how-to, etc.)?
 - What must a genuinely useful answer contain, and what evidence would settle it?
 - Which domains of expertise are truly required — and, just as important, which classic research angles are IRRELEVANT to this particular need?
@@ -1391,6 +1392,7 @@ Write this diagnosis up as a concise mission analysis of 60-140 words (the "need
 PHASE 2 — SPROUT THE TEAM FROM THE ANALYSIS:
 Design ${pinnedCount ? `exactly ${pinnedCount}` : "between 3 and 9 (your call — exactly as many as the need demands, no padding)"} specialist research agents, each derived directly from a requirement identified in Phase 1.
 - Every agent must map to a concrete requirement of THIS request. Do NOT apply a stock template of perspectives (technical / socioeconomic / historical / ethical / futuristic) unless your analysis shows that angle is genuinely needed here.
+- KEEP THE SWARM POINTED AT THE PRIMARY QUESTION. Context details (the user's hardware, budget, location, exclusions) are lenses every agent applies to their findings — NOT research subjects. Never spend the majority of the team investigating the user's own constraints: for a "best X for my setup" request, field agents that FIND and RANK the X's, with at most one agent validating fit against the setup — and only if the analysis shows fit is genuinely uncertain or decisive.
 - If the need is narrow, prefer a small team of tightly targeted agents over generic filler roles.
 - Give each agent a unique creative persona name, a specialty title a real expert in this exact problem space would hold, a specific investigative assignment stating what they must find out and which kinds of sources or evidence to chase, and a theme color.${depthHint}${fringe ? `\n${FRINGE_ORCHESTRATOR_HINT}` : ""}`;
 
@@ -1923,6 +1925,7 @@ ${fringe
 - Markdown: Use clean, standard Markdown.
 
 DENSITY MANDATE (mandatory, applies to every structure and depth):
+- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame.
 - Carry the specialists' concrete material FORWARD: numbers, dates, names, prices, direct quotes, and source URLs must survive into this synthesis. Never compress a quantified finding into a vague generalization.
 - Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
 - Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
