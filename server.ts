@@ -899,7 +899,7 @@ ${noOwnSearch}
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: `${systemInstruction}\n\n${prompt}` }],
-        max_tokens: hasSearch ? 16000 : 8000,
+        max_tokens: hasSearch ? 16000 : (taskRole === "synthesis" ? 32000 : 8000),
         ...(hasSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }] } : {}),
         stream: true
       })
@@ -1553,7 +1553,7 @@ Ensure the new agent is distinct and does not replicate the other existing agent
 The overarching research project is: "${topic}".
 Your specific investigative assignment is: "${agent.investigativeAngle}".
 
-Deliver a FOCUSED TACTICAL BRIEF of approximately 500-800 words. Be sharp, dense, and high-signal. Cut all filler and padding.
+Deliver a FOCUSED TACTICAL BRIEF of approximately 800-1,200 words. Be sharp, dense, and high-signal. Cut all filler and padding — but never cut evidence: concrete data, dates, and sources stay.
 Structure your response with Markdown:
 - A brief 'Role Perspective' (2-3 sentences on how a ${agent.role} frames this issue).
 - 'Key Findings' as a set of tight, information-rich bullet points.
@@ -1574,12 +1574,13 @@ Structure your response beautifully with Markdown:
 - Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
 DEEP-ANALYSIS REQUIREMENTS (mandatory):
+- LENGTH FLOOR: at least 5,000-8,000 words. If you must choose, always choose more depth.
 - Provide QUANTIFIED data, figures, and estimates wherever possible (ranges, magnitudes, timelines, costs).
 - Include AT LEAST ONE Markdown table organizing key data, comparisons, or metrics.
 - Include a 'Scenario Analysis' section modeling best-case, base-case, and worst-case trajectories.
 - Include a 'Contrarian Considerations' section that challenges the prevailing assumptions of your own analysis.
 
-Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
+Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST 2,500-4,000 words — a floor, not a ceiling. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
       } else {
         prompt = `You are ${agent.name}, a specialized research agent working as a ${agent.role}.
 The overarching research project is: "${topic}".
@@ -1593,7 +1594,7 @@ Structure your response beautifully with Markdown:
 - Include 'Critical Insights' with deep thinking, interconnected consequences, and future implications.
 - Include 'Methodology & Data Vectors' reporting ONLY the live searches actually executed this run (the exact queries and what they returned). Never describe a search, database, or archive check that did not actually happen.
 
-Be exhaustive, verbose, informative, and write in your persona. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
+Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST 2,500-4,000 words — a floor, not a ceiling. Do not speak about yourself in the third person. Provide publication-grade, extremely high-quality content.`;
       }
 
       if (priorBlock) {
@@ -1713,11 +1714,15 @@ Be exhaustive, verbose, informative, and write in your persona. Do not speak abo
 
       console.log(`Synthesis Context size: ${reportsContext.length} chars`);
 
+      // Explicit word FLOORS per depth — without them models default to
+      // executive-summary length no matter how rich the specialist material.
       let depthDirective = "";
       if (depth === "recon") {
-        depthDirective = "\n\nDEPTH DIRECTIVE — RECON: Produce a SHARP EXECUTIVE SYNTHESIS, roughly 40% more concise than a standard report. Prioritize the highest-signal conclusions, trim elaboration, and keep every section tight and decision-oriented.";
+        depthDirective = "\n\nDEPTH DIRECTIVE — RECON: Produce a SHARP TACTICAL SYNTHESIS of roughly 1,500-2,500 words. Prioritize the highest-signal conclusions and keep every section decision-oriented — but concrete data, prices, dates, and sources still carry forward; concision means cutting filler, never cutting evidence.";
       } else if (depth === "deep") {
-        depthDirective = "\n\nDEPTH DIRECTIVE — DEEP: Maximize retention of technical nuance. Preserve quantified data, edge cases, dissenting views, tables, and scenario analyses surfaced by the specialists. Favor comprehensiveness and analytical rigor over brevity.";
+        depthDirective = "\n\nDEPTH DIRECTIVE — DEEP: Produce an EXHAUSTIVE synthesis of AT LEAST 8,000-12,000 words — this is a floor, not a ceiling. Maximize retention of technical nuance. Preserve quantified data, edge cases, dissenting views, tables, and scenario analyses surfaced by the specialists. Every theme gets a full-length treatment; if you must choose, always choose more depth.";
+      } else {
+        depthDirective = "\n\nDEPTH DIRECTIVE — STANDARD: Produce a DENSE, comprehensive synthesis of AT LEAST 4,000-6,000 words — this is a floor, not a ceiling. Do not summarize the specialists' work down to headlines: expand each theme with their actual evidence, numbers, and sources.";
       }
 
       let critiquesBlock = "";
@@ -1820,7 +1825,13 @@ ${fringe
         : "- Tone: Academic, rigorous, insightful, and authoritative."}
 - Depth: Be extremely detailed. Retain the technical nuances from the specialist reports.
 - Flow: Ensure a smooth narrative transition between sections.
-- Markdown: Use clean, standard Markdown.${depthDirective}`;
+- Markdown: Use clean, standard Markdown.
+
+DENSITY MANDATE (mandatory, applies to every structure and depth):
+- Carry the specialists' concrete material FORWARD: numbers, dates, names, prices, direct quotes, and source URLs must survive into this synthesis. Never compress a quantified finding into a vague generalization.
+- Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
+- Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
+- Append a final section titled "## Source Ledger": every distinct source cited anywhere in the specialist reports, organized into credibility tiers (High 8-10 / Medium 5-7 / Low 1-4), each entry with its URL, a trust score, and one line on what it supports or contradicts.${depthDirective}`;
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
