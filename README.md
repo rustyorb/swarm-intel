@@ -220,7 +220,9 @@ All routes are served by `server.ts` on port 3369 (or the next free port above i
 | `POST` | `/api/research/initiate` | Orchestrator assembles 5 to 7 specialist agents for a topic. | JSON |
 | `POST` | `/api/research/regenerate-agent` | Redesign a single agent, optionally guided by a user nudge. | JSON |
 | `POST` | `/api/research/agent-run-stream` | Run one agent's deep investigation. | SSE |
-| `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. | SSE |
+| `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. Inputs are persisted to `runs/` on receipt, the finished synthesis on completion. | SSE |
+| `GET` | `/api/research/runs` | List synthesis runs persisted on disk under `runs/`. | JSON |
+| `GET` | `/api/research/runs/:id/:file` | Read a persisted run file (`synthesis.md`, `inputs.json`, or `meta.json`). | JSON/MD |
 | `POST` | `/api/research/interrogate-stream` | Answer a follow-up question grounded in the session's reports, as the full panel or a single specialist in persona. | SSE |
 | `POST` | `/api/research/redteam-stream` | VEX adversarial cross-examination of a single specialist report (weaknesses, blind spots, counter-evidence, confidence verdict). | SSE |
 | `POST` | `/api/research/extract-claims` | Extract the Claim Atlas: the run's major factual claims mapped to the specialists that support or dispute each one, plus cited sources. | JSON |
