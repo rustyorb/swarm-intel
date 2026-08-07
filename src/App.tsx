@@ -429,7 +429,7 @@ function loadStoredSession(): ResearchSession | null {
     // mid-flight leaves the UI frozen at that stage with no errors.
     if (["assembling", "researching", "redteaming", "synthesizing"].includes(parsed.status)) {
       parsed.status = "failed";
-      parsed.error = "Session was interrupted by a page reload before it finished. Start a new run.";
+      parsed.error = "Session was interrupted by a page reload before it finished. Completed agent reports below are preserved, and any finished synthesis was also saved server-side in the runs/ folder (see /api/research/runs). Start a new run or recover from there.";
     }
     return parsed;
   } catch (e) {
@@ -1002,17 +1002,39 @@ export default function App() {
     });
   };
 
-  // Save session to localStorage when it changes
+  // Save session to localStorage when it changes — trailing-throttled to one
+  // write per second. During SSE streaming, session updates arrive many times
+  // per second and each save synchronously serializes multi-MB state; doing
+  // that per chunk pegged the main thread hard enough to kill the tab right
+  // as large syntheses finished. Worst case on a hard crash: the last <1s of
+  // stream text is unsaved locally (the server persists the full run anyway).
+  const sessionSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionSaveRef = useRef<ResearchSession | null>(null);
   useEffect(() => {
-    try {
-      if (session) {
-        localStorage.setItem("research_swarm_current_session", JSON.stringify(session));
-      } else {
-        localStorage.removeItem("research_swarm_current_session");
+    sessionSaveRef.current = session;
+    if (!session) {
+      if (sessionSaveTimer.current) {
+        clearTimeout(sessionSaveTimer.current);
+        sessionSaveTimer.current = null;
       }
-    } catch (e) {
-      console.error("Failed to save session:", e);
+      try {
+        localStorage.removeItem("research_swarm_current_session");
+      } catch (e) {
+        console.error("Failed to clear session:", e);
+      }
+      return;
     }
+    if (sessionSaveTimer.current) return;
+    sessionSaveTimer.current = setTimeout(() => {
+      sessionSaveTimer.current = null;
+      try {
+        if (sessionSaveRef.current) {
+          localStorage.setItem("research_swarm_current_session", JSON.stringify(sessionSaveRef.current));
+        }
+      } catch (e) {
+        console.error("Failed to save session:", e);
+      }
+    }, 1000);
   }, [session]);
 
   // Save logs to localStorage when they change
@@ -1630,6 +1652,7 @@ export default function App() {
       const decoder = new TextDecoder();
       let finalReport = "";
       let buffer = "";
+      let lastFlush = 0;
 
       if (reader) {
         while (true) {
@@ -1670,10 +1693,19 @@ export default function App() {
               }
               if (data?.type === "chunk" && data.text) {
                 finalReport += data.text;
-                setSession(prev => {
-                  if (!prev) return null;
-                  return { ...prev, synthesizedReport: finalReport };
-                });
+                // Flush to state at most ~2x/sec: rendering + re-parsing the
+                // whole growing report on EVERY chunk is what white-screened
+                // large runs. Completion (line below the loop) writes the
+                // full final text, so a skipped trailing partial is harmless.
+                const now = Date.now();
+                if (now - lastFlush > 400) {
+                  lastFlush = now;
+                  const snapshot = finalReport;
+                  setSession(prev => {
+                    if (!prev) return null;
+                    return { ...prev, synthesizedReport: snapshot };
+                  });
+                }
               } else if (data?.type === "done") {
                 if (data.text) {
                   finalReport = data.text;
