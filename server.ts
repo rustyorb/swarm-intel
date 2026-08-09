@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import os from "os";
 import net from "net";
 import dotenv from "dotenv";
@@ -11,6 +12,24 @@ import { GoogleGenAI, Type } from "@google/genai";
 // (e.g. an exhausted OPENAI_API_KEY set in Windows) silently beats a fresh
 // one in .env, because dotenv's default is to NOT overwrite existing vars.
 dotenv.config({ override: true });
+
+// --- Run persistence ---------------------------------------------------------
+// Finished research must never depend on a browser tab surviving: a synthesis
+// run persists its INPUTS (all specialist reports) the moment the request
+// arrives and its OUTPUT the moment generation completes, under
+// runs/<timestamp>-<topic-slug>/. Best-effort by design — a disk failure logs
+// a warning and the pipeline continues.
+const RUNS_DIR = path.join(process.cwd(), "runs");
+const slugify = (s: string) =>
+  String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "run";
+const persistRunFile = (runDir: string, name: string, data: string) => {
+  try {
+    fs.mkdirSync(runDir, { recursive: true });
+    fs.writeFileSync(path.join(runDir, name), data, "utf8");
+  } catch (e: any) {
+    console.warn(`Run persistence failed (${name}): ${e?.message || e}`);
+  }
+};
 
 // Validate Gemini API Key
 const apiKey = process.env.GEMINI_API_KEY;
@@ -1794,6 +1813,11 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
 
       console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
+      // Persist the run's inputs immediately — if anything downstream dies
+      // (client tab, stream, process), the specialists' work is already safe.
+      const runDir = path.join(RUNS_DIR, `${new Date().toISOString().replace(/[:.]/g, "-")}-${slugify(topic)}`);
+      persistRunFile(runDir, "inputs.json", JSON.stringify({ topic, config, critiques, catalyticTerms, reports }, null, 2));
+
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
@@ -1929,6 +1953,7 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
 - Carry the specialists' concrete material FORWARD: numbers, dates, names, prices, direct quotes, and source URLs must survive into this synthesis. Never compress a quantified finding into a vague generalization.
 - Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
 - Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
+- NEGATIVE-EXISTENCE DISCIPLINE: never assert that a system, program, name, or acronym "does not exist" or "has no known use" unless the specialist reports show a DEDICATED verification sweep (multiple query variants, acronym expansions, alternate spellings) that came back empty. Anything less MUST be phrased as "not found in this sweep" and emitted as a follow-up thread. Absence of evidence in a limited search is never evidence of absence.
 - Append a final section titled "## Source Ledger": every distinct source cited anywhere in the specialist reports, organized into credibility tiers (High 8-10 / Medium 5-7 / Low 1-4), each entry with its URL, a trust score, and one line on what it supports or contradicts.${depthDirective}`;
 
       const pingInterval = setInterval(() => {
@@ -1951,6 +1976,9 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
 
         clearInterval(pingInterval);
         console.log(`Synthesis generation complete. Response text length: ${synthesizedReport.length}`);
+        persistRunFile(runDir, "synthesis.md", synthesizedReport);
+        persistRunFile(runDir, "meta.json", JSON.stringify({ topic, completedAt: new Date().toISOString(), chars: synthesizedReport.length, depth, fringe, delta }, null, 2));
+        console.log(`Run persisted to ${runDir}`);
         res.write(`data: ${JSON.stringify({ type: "done", text: synthesizedReport })}\n\n`);
         res.end();
       } catch (error: any) {
@@ -1961,6 +1989,41 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
       console.error("Error in /api/research/synthesize-stream:", error);
       res.write(`data: ${JSON.stringify({ type: "error", error: error.message || "Synthesis failed." })}\n\n`);
       res.end();
+    }
+  });
+
+  // 3.2. Run persistence endpoints — list persisted runs and read a run's
+  // files, so finished research is recoverable even after a dead tab.
+  app.get("/api/research/runs", (_req, res) => {
+    try {
+      if (!fs.existsSync(RUNS_DIR)) return res.json({ runs: [] });
+      const runs = fs.readdirSync(RUNS_DIR, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => {
+          const dir = path.join(RUNS_DIR, d.name);
+          let meta: any = null;
+          try { meta = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8")); } catch {}
+          return { id: d.name, hasSynthesis: fs.existsSync(path.join(dir, "synthesis.md")), meta };
+        })
+        .sort((a, b) => b.id.localeCompare(a.id));
+      res.json({ runs });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to list runs." });
+    }
+  });
+
+  app.get("/api/research/runs/:id/:file", (req, res) => {
+    try {
+      const { id, file } = req.params;
+      // Allowlisted filenames + strict id charset = no path traversal.
+      if (!/^[a-zA-Z0-9._-]+$/.test(id) || !["synthesis.md", "inputs.json", "meta.json"].includes(file)) {
+        return res.status(400).json({ error: "Invalid run id or file." });
+      }
+      const p = path.join(RUNS_DIR, id, file);
+      if (!fs.existsSync(p)) return res.status(404).json({ error: "Not found." });
+      res.type(file.endsWith(".json") ? "application/json" : "text/markdown").send(fs.readFileSync(p, "utf8"));
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to read run file." });
     }
   });
 
