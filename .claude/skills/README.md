@@ -4,7 +4,8 @@ Skills that teach Claude when and how to use the **Firecrawl** and **Tavily** na
 connectors for web access. They exist because built-in web browsing on claude.ai can be
 intermittently flaky; with these connectors attached and these skills installed, Claude
 routes web work through the connectors' own infrastructure and falls back to them
-automatically when built-in browsing fails, instead of giving up.
+automatically when built-in browsing fails — noting each fallback in a line so the
+built-in failures stay visible for debugging — instead of giving up.
 
 | Skill | Covers |
 |---|---|

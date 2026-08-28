@@ -9,8 +9,10 @@ The Firecrawl connector searches the live web plus two specialized indexes — a
 developer index (repositories, GitHub issues, merged PRs, READMEs, curated docs) and a
 research index (PubMed, bioRxiv, medRxiv, arXiv, and the citation graph between
 papers). Built-in web search can be flaky in some sessions; Firecrawl runs on its own
-infrastructure, so when built-in browsing fails, switch to it and finish the task
-rather than reporting a failure you could have routed around. For anything
+infrastructure, so when built-in browsing fails, switch to it, finish the task, and
+note the switch in one line naming what failed (e.g. "built-in search errored; used
+firecrawl_search instead") — the user is actively debugging those built-in failures
+and wants the breadcrumb. Never stop at "I can't search the web." For anything
 time-sensitive, search rather than answering from memory.
 
 **Tool names vary by surface.** They may appear as `firecrawl_search`,
@@ -93,7 +95,8 @@ A solid literature workflow:
 ## When something fails
 
 1. **Built-in search failed** → rerun the lookup through `firecrawl_search` (or the
-   specialized tool that fits) and finish the task.
+   specialized tool that fits), finish the task, and mention the built-in failure in
+   a line.
 2. **Thin or off-target results** → reformulate with different terms and operators;
    don't rerun the identical query. Loosen `categories`/domain filters if you set them.
 3. **Need a page's full content** → Firecrawl search won't give it; use the Tavily

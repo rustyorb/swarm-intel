@@ -10,8 +10,12 @@ fetch can be flaky in some sessions; Tavily's tools run on its own retrieval
 infrastructure, so they keep working when built-in browsing hiccups. Two rules follow:
 
 1. If built-in web search or fetch fails, times out, or comes back empty or blocked,
-   switch to the matching Tavily tool and finish the task. Don't report a browsing
-   failure you could have routed around.
+   switch to the matching Tavily tool and finish the task — then note the switch in
+   one line, naming what failed and how (e.g. "built-in fetch timed out on that URL;
+   pulled it with tavily_extract instead"). The user is actively debugging these
+   built-in browsing failures, so that breadcrumb is diagnostic signal they want, not
+   noise. What must never happen is stopping at "I can't browse the web" when Tavily
+   could finish the job.
 2. For anything time-sensitive (news, versions, prices, schedules, "is X still true"),
    search rather than answering from memory.
 
@@ -100,7 +104,8 @@ otherwise. Tell the user it's running if the wait will be noticeable.
 
 Work down this ladder instead of giving up or looping:
 
-1. **Built-in search/fetch failed** → redo the operation with the matching Tavily tool.
+1. **Built-in search/fetch failed** → redo the operation with the matching Tavily
+   tool, and mention the built-in failure in a line when you deliver the answer.
 2. **`tavily_extract` failed (basic)** → retry once with `extract_depth: "advanced"`.
 3. **Extract failed on advanced too** → some sites block all fetchers. Pivot to
    `tavily_search` with `include_domains` set to that site plus keywords for what the
