@@ -40,8 +40,10 @@ count: two or three thoughtfully different framings beat many near-duplicates.
 Returns ranked results under `data.web` (or `data.news` / `data.images` when you set
 `sources`): title, URL, and a description that ranges from a sentence to a substantial
 markdown excerpt. It is a discovery tool — results are not full pages. When you need to
-actually read a result, use the Tavily connector's `tavily_extract` (if installed) or
-built-in fetch on the URL.
+actually read a result, use the Tavily connector's `tavily_extract` (if installed), or
+built-in fetch only if it is currently working — never as a retry of a fetch that just
+failed. With neither available, work from the result descriptions (often substantial
+excerpts) and say plainly that full-page retrieval is unavailable right now.
 
 Sharpen queries with:
 
@@ -100,7 +102,10 @@ A solid literature workflow:
 2. **Thin or off-target results** → reformulate with different terms and operators;
    don't rerun the identical query. Loosen `categories`/domain filters if you set them.
 3. **Need a page's full content** → Firecrawl search won't give it; use the Tavily
-   connector's `tavily_extract` if installed, else built-in fetch, on the result URL.
+   connector's `tavily_extract` if installed. Built-in fetch is a fallback only while
+   it is working — if it is the thing that failed, don't loop back into it: answer
+   from the search descriptions and passages you already have, and tell the user
+   full-page retrieval is unavailable right now.
 4. **Still stuck** → tell the user exactly what you searched and what came back
    (partial results included) — never a bare "I can't search the web."
 
