@@ -31,10 +31,10 @@ Spec: `docs/superpowers/specs/2026-10-08-mission-control-live-design.md`.
 - `gatherLiveContext(queries, refine?, onStage?)`
 - SSE: `data: {"type":"stage","stage":"searching","wave":1}`
 
-- [ ] Add the type and the callback params; emit at the five points.
-- [ ] `scripts/agent_probe.py` prints stage events with elapsed seconds.
-- [ ] Verify with the probe: order is planning → searching 1 → (searching 2) → reading → reasoning → writing → done.
-- [ ] Lint, commit: `server: real stage telemetry on agent and synthesis streams`.
+- [x] Add the type and the callback params; emit at the five points.
+- [x] `scripts/agent_probe.py` prints stage events with elapsed seconds.
+- [x] Verify with the probe: order is planning → searching 1 → (searching 2) → reading → reasoning → writing → done.
+- [x] Lint, commit: `server: real stage telemetry on agent and synthesis streams`.
 
 ### Task 2: Client telemetry replaces the simulation
 
@@ -45,10 +45,10 @@ Spec: `docs/superpowers/specs/2026-10-08-mission-control-live-design.md`.
 - `deriveProgress(t: AgentTelemetry, depth): { percent: number; statusText: string }`
 - `agentProgress` becomes a `useMemo` over `agentTelemetry` plus a 1 s tick for the reasoning timer.
 
-- [ ] Delete `simOperations`, `runSimulatedProgress`, the interval plumbing and the fake log lines.
-- [ ] Handle `stage` events in the agent loop; count words on chunks; set `done`/`failed`.
-- [ ] Throttle the per-chunk `setSession` to 400 ms with a final flush.
-- [ ] Lint, verify in the browser (card labels are real), commit: `ui: real per-agent stages replace the simulated progress`.
+- [x] Delete `simOperations`, `runSimulatedProgress`, the interval plumbing and the fake log lines.
+- [x] Handle `stage` events in the agent loop; count words on chunks; set `done`/`failed`.
+- [x] Throttle the per-chunk `setSession` to 400 ms with a final flush.
+- [x] Lint, verify in the browser (card labels are real), commit: `ui: real per-agent stages replace the simulated progress`.
 
 ### Task 3: LiveWire pane
 
@@ -57,24 +57,24 @@ Spec: `docs/superpowers/specs/2026-10-08-mission-control-live-design.md`.
 **Interfaces:**
 - `<LiveWire agents telemetry activeAgentId selectedId onSelect text mode="agent"|"synthesis" synthesisWords startedAt getColorHex />`
 
-- [ ] Build the component: header, stage chips, clock, word count, follow-live toggle, markdown body, reasoning placeholder.
-- [ ] Wire the agent loop and synthesis loop to feed `liveText` (ref + 400 ms flush).
-- [ ] Lint, verify in the browser, commit: `ui: LiveWire pane streams the active report in the center view`.
+- [x] Build the component: header, stage chips, clock, word count, follow-live toggle, markdown body, reasoning placeholder.
+- [x] Wire the agent loop and synthesis loop to feed `liveText` (ref + 400 ms flush).
+- [x] Lint, verify in the browser, commit: `ui: LiveWire pane streams the active report in the center view`.
 
 ### Task 4: Directive viewer
 
 **Files:** `src/App.tsx` (header button, drawer, results tab), ops-log line.
 
-- [ ] Drawer component inline in App: markdown render, copy, header list.
-- [ ] Results view: "Directive" tab when conditioned.
-- [ ] Ops log: one-liner instead of the full directive.
-- [ ] Lint, verify, commit: `ui: directive viewer (header drawer + results tab)`.
+- [x] Drawer component inline in App: markdown render, copy, header list.
+- [x] Results view: "Directive" tab when conditioned.
+- [x] Ops log: one-liner instead of the full directive.
+- [x] Lint, verify, commit: `ui: directive viewer (header drawer + results tab)`.
 
 ### Task 5: Reset aborts in-flight requests
 
 **Files:** `src/App.tsx` (`runAbortRef`, signal on every pipeline fetch, reset handler, abort handling in loops), `server.ts` (log client disconnect on the two streaming routes).
 
-- [ ] Lint, verify (reset mid-run stops the loop, logs cancel, no "failed" state), commit: `ui: reset aborts in-flight run requests`.
+- [x] Lint, verify (reset mid-run stops the loop, logs cancel, no "failed" state), commit: `ui: reset aborts in-flight run requests`.
 
 ### Task 6: Agent portraits
 
@@ -83,18 +83,18 @@ Spec: `docs/superpowers/specs/2026-10-08-mission-control-live-design.md`.
 **Interfaces:**
 - `POST /api/research/agent-portrait { name, role, investigativeAngle, colorTheme, fringe } → { url: string | null }`
 
-- [ ] Server route with sha1 cache, Gemini image call, PNG write, static serving.
-- [ ] Client wiring and toggle (default on).
-- [ ] Verify: curl the route once (cost ~$0.04), then a run shows portraits on cards and nodes.
-- [ ] Lint, commit: `feat: agent portraits (Gemini image gen, cached per persona)`.
+- [x] Server route with sha1 cache, Gemini image call, PNG write, static serving.
+- [x] Client wiring and toggle (default on).
+- [x] Verify: curl the route once (cost ~$0.04), then a run shows portraits on cards and nodes.
+- [x] Lint, commit: `feat: agent portraits (Gemini image gen, cached per persona)`.
 
 ### Task 7: Run stats strip
 
 **Files:** `src/types.ts` (`startedAt`, `completedAt`), `src/App.tsx` (set timestamps; strip in completed header).
 
-- [ ] Lint, verify on a completed session, commit: `ui: run stats strip on completed view`.
+- [x] Lint, verify on a completed session, commit: `ui: run stats strip on completed view`.
 
 ### Task 8: Docs
 
-- [ ] README: feature log row v3.3.0, API table rows (`agent-portrait`, `stage` SSE event), UI version badge.
-- [ ] HANDOFF entry. Commit.
+- [x] README: feature log row v3.3.0, API table rows (`agent-portrait`, `stage` SSE event), UI version badge.
+- [x] HANDOFF entry. Commit.

@@ -230,8 +230,9 @@ All routes are served by `server.ts` on port 3369 (or the next free port above i
 | `POST` | `/api/research/interrogate-stream` | Answer a follow-up question grounded in the session's reports, as the full panel or a single specialist in persona. | SSE |
 | `POST` | `/api/research/redteam-stream` | VEX adversarial cross-examination of a single specialist report (weaknesses, blind spots, counter-evidence, confidence verdict). | SSE |
 | `POST` | `/api/research/extract-claims` | Extract the Claim Atlas: the run's major factual claims mapped to the specialists that support or dispute each one, plus cited sources. | JSON |
+| `POST` | `/api/research/agent-portrait` | Generate (or return the cached) headshot for a persona: `{ name, role, investigativeAngle, colorTheme, fringe }` → `{ url }`. Images are cached by `sha1(name|role)` under `portraits/` and served at `/portraits/<key>.png`. | JSON |
 
-The two streaming endpoints emit `data:` events with a `type` field of `ping`, `chunk`, `done`, or `error`. A 5-second `ping` keeps the connection alive during long generations.
+The streaming endpoints emit `data:` events with a `type` field of `ping`, `chunk`, `done`, or `error`. Agent runs additionally emit `grounding` (`mode`: `native` / `injected` / `none`) and `stage` events (`planning`, `searching` with `wave`, `reading` with `pages`, `reasoning`, `writing`), and synthesis emits `stage` (`reasoning`, `writing`); the UI's LiveWire pane and progress rings are driven by these, not by a timer. A 5-second `ping` keeps the connection alive during long generations.
 
 ---
 
@@ -288,6 +289,7 @@ The app keeps state in the browser under these `localStorage` keys:
 | v3.0.0 | Knowledge Library — full-screen searchable archive of every swarm (full-text search with match locations, sort, favorite/depth/chat filters, tags, inline rename, two-step delete, direct dossier export, JSON archive import/export); history cap raised to 50 with favorite-preserving eviction |
 | v3.1.0 | Red Team — optional adversarial critique round: VEX (Chief Adversarial Officer) cross-examines every specialist report live before synthesis (weak evidence, blind spots, counter-evidence, confidence verdicts); the synthesis must rebut or concede each critique in a dedicated Findings & Rebuttals section; live Tribunal UI + rose network-view state + Red Team tab in results |
 | v3.2.0 | Directive Conditioner — expands any topic into a full research directive (primary question, epistemic categories, coverage, failure modes, deliverables, research behaviour, success condition) before launch, with the original input fenced verbatim beneath it; synthesis no longer fires twice per run (Strict Mode updater bug); stream parsers now surface provider errors and flag token-limit truncation; VEX critiques are weighed as internal review rather than outranking sourced evidence |
+| v3.3.0 | Mission Control, live — real stage telemetry (planning → searching waves → reading pages → model reasoning → writing) replaces the simulated progress ring; LiveWire pane streams the active report (or the synthesis) in the center view with a reasoning timer, word count and follow-live scrolling; Directive viewer (run-header drawer + results tab); Reset aborts in-flight requests; generated agent portraits (Gemini image, cached per persona, shown on cards, network nodes, modals and the Agent Library); run stats strip on the completed view; blank-filler degeneration guard and localStorage quota safety |
 
 ---
 

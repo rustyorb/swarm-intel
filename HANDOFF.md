@@ -2,6 +2,20 @@
 
 > Updated at end of every real session, by the Fable who worked. Newest entry first.
 
+## 2026-10-08 (evening) — SCANNING — Mission Control Live shipped (v3.3.0), pre-approved by Kyle
+
+**Spec/plan:** `docs/superpowers/specs/2026-10-08-mission-control-live-design.md`, `docs/superpowers/plans/2026-10-08-mission-control-live.md`.
+**Done (all on main):**
+- **Real stage telemetry.** `agent-run-stream` and `synthesize-stream` emit `stage` SSE events (`planning`, `searching` w/ `wave`, `reading` w/ `pages`, `reasoning`, `writing`) from `onStage` callbacks threaded through `runUniversalStream` → `gatherLiveContext`. Client keeps `agentTelemetry` per agent and derives the old `{percent, statusText}` for cards/SwarmNetwork; `simOperations` / `runSimulatedProgress` (SIMULATING_MODELS etc.) are gone, as are their fake ops-log lines. A probe showed 28 s of model reasoning per agent that was previously invisible.
+- **LiveWire pane** (`src/components/LiveWire.tsx`) above the grid/network while running: active agent (or Lead Orchestrator during synthesis) with portrait, stage chips, elapsed, live word count and w/s, reasoning placeholder with timer, markdown body with follow-live auto-scroll, channel tabs to replay finished reports. Lesson: a flex-column child with `overflow-hidden` collapses to 0 — it needs `flex-shrink-0`.
+- **Directive viewer:** DIRECTIVE · N words button in the run header opens a right drawer (section jump list, copy); "Directive" tab in the completed results; reader mode supports it; the ops log no longer carries the full directive.
+- **Reset aborts in-flight requests** via one `AbortController` per run on initiate/agent-run/red-team/catalytic/synthesis; loops exit on AbortError without marking the session failed. Server still can't cancel provider calls (logs `[Client] disconnected`).
+- **Agent portraits:** `POST /api/research/agent-portrait` → Gemini `gemini-3.1-flash-image` (override `PORTRAIT_MODEL`), cached `portraits/<sha1(name|role)>.png` (gitignored), served at `/portraits/`; ~10 s and ~$0.04 each; fire-and-forget from the client when the team arrives and on agent regenerate; `portraitUrl` on `Agent`/`SavedAgent`; `PixelAvatar` renders it with pixel fallback; launch-panel toggle "Agent Portraits" (default on, `SwarmConfig.portraits`). First one (Mara Papertrail) looked exactly right: amber rim light, binders, tech collar.
+- **Run stats strip** on the completed synthesis header: elapsed (`startedAt`/`completedAt` on the session), specialists, report words, synthesis words, unique cited URLs, grounding modes (red if any agent ran on memory), depth. Grounding mode now stays `injected` when the provider's native note arrives second.
+- Per-chunk `setSession` in the agent loop is throttled to 400 ms (was every chunk).
+**Verified in the browser pane** (Gemini default models, recon, 3 agents, ~$0.30): portraits on all three cards within seconds of team arrival; DIRECTIVE drawer; LiveWire showed REASON stage with timer, then synthesis mode; completed view: 5:36 elapsed, 5,664 report words, 3,805 synthesis words, 22 sources, "3 live"; Directive tab present; zero console errors; Reset mid-assembly logged the cancel.
+**Next:** run Kyle's deep/fringe topic with the new UI (that is the real test); consider `display: "summarized"` thinking for Anthropic agents to show reasoning text in LiveWire; dossier export doesn't embed portraits yet (it's standalone HTML — would need data URLs); Agent Library cards already show portraits for saved personas; abort-on-reset for the orchestrator call server-side is still open.
+
 ## 2026-10-08 (afternoon) — SCANNING — live-run shakedown: six more bugs fixed, pipeline verified end-to-end via API probes
 
 **What happened:** Kyle ran real deep/fringe swarms against the morning's code and each run exposed a bug that predates the conditioner. All fixed and pushed (commits `e4babe2`..`5f4e5ce`):
