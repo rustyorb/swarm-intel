@@ -1222,29 +1222,47 @@ async function runUniversalStream(
   let injectedUrls: string[] = [];
   let injectedExtracted: string[] = [];
   let injectedQueries: string[] = [];
-  const nativeUrls: string[] = [];
-  // Audit means drop: a URL already in the injected set is not a finding.
-  // If the native pass has nothing new, the gap pass came back empty and it
-  // is reported that way — never merged in and called deep.
+  const nativeHits: { url: string; title: string }[] = [];
+  // Audit means drop. Two gates, both required for a native result to count:
+  //  1. not already in the injected set (inject-membership), and
+  //  2. ON TARGET — its title or URL names a query-plan target. SearXNG never
+  //     touching a page does not make it a finding; a Wikipedia film page
+  //     with the subject's name is adjacent noise, not an artifact.
+  // If nothing survives, the gap pass came back empty and is reported that
+  // way — never merged in and called deep.
   const auditNativePass = (label: string) => {
     if (!hasSearch) return;
     const have = new Set(injectedUrls.map(normUrl));
+    const targets = new Set<string>();
+    for (const q of injectedQueries) {
+      for (const w of q.toLowerCase().replace(/site:\S+/g, " ").replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
+        if ((w.length >= 4 || /^\d{2,}$/.test(w)) && !QUERY_STOPWORDS.has(w)) targets.add(w);
+      }
+    }
+    const onTarget = (h: { url: string; title: string }): boolean => {
+      const hay = `${h.title} ${decodeURIComponent(h.url).replace(/[^a-zA-Z0-9]+/g, " ")}`.toLowerCase();
+      let hits = 0;
+      for (const t of targets) if (hay.includes(t)) { hits++; if (hits >= 2) return true; }
+      return false;
+    };
     const seen = new Set<string>();
     const fresh: string[] = [];
-    let dropped = 0;
-    for (const u of nativeUrls) {
-      const n = normUrl(u);
+    let dupes = 0;
+    let adjacent = 0;
+    for (const h of nativeHits) {
+      const n = normUrl(h.url);
       if (!n || seen.has(n)) continue;
       seen.add(n);
-      if (have.has(n)) dropped++;
-      else fresh.push(u);
+      if (have.has(n)) { dupes++; continue; }
+      if (!onTarget(h)) { adjacent++; continue; }
+      fresh.push(h.url);
     }
-    if (nativeUrls.length === 0) {
+    if (nativeHits.length === 0) {
       onGrounding?.({ mode: "native", detail: `${label}: gap pass ran no searches` });
     } else if (fresh.length === 0) {
-      onGrounding?.({ mode: "native", detail: `${label}: gap pass came back EMPTY — ${dropped} result(s) already in hand were dropped; no new grounding from the native tool` });
+      onGrounding?.({ mode: "native", detail: `${label}: gap pass came back EMPTY — ${dupes} already in hand and ${adjacent} off-target result(s) dropped; no new grounding from the native tool` });
     } else {
-      onGrounding?.({ mode: "native", detail: `${label}: gap pass found ${fresh.length} new artifact(s) (${dropped} duplicate(s) dropped) — ${fresh.slice(0, 4).join(" | ")}` });
+      onGrounding?.({ mode: "native", detail: `${label}: gap pass found ${fresh.length} on-target artifact(s) (${dupes} duplicate(s), ${adjacent} off-target dropped) — ${fresh.slice(0, 4).join(" | ")}` });
     }
   };
 
@@ -1332,7 +1350,7 @@ Rules: never re-run or paraphrase a listed query; never re-open a URL that was a
         emit(chunk.text);
       }
       const gChunks: any[] = (chunk.candidates?.[0] as any)?.groundingMetadata?.groundingChunks || [];
-      for (const gc of gChunks) if (gc?.web?.uri) nativeUrls.push(String(gc.web.uri));
+      for (const gc of gChunks) if (gc?.web?.uri) nativeHits.push({ url: String(gc.web.uri), title: String(gc.web.title || "") });
       const finish = chunk.candidates?.[0]?.finishReason as string | undefined;
       if (finish === "MAX_TOKENS") truncated = true;
       else if (finish === "SAFETY" || finish === "RECITATION" || finish === "PROHIBITED_CONTENT") {
@@ -1401,7 +1419,7 @@ Rules: never re-run or paraphrase a listed query; never re-open a URL that was a
               truncated = true;
             } else if (parsed.type === "content_block_start" && parsed.content_block?.type === "web_search_tool_result") {
               const results = Array.isArray(parsed.content_block.content) ? parsed.content_block.content : [];
-              for (const r of results) if (r?.url) nativeUrls.push(String(r.url));
+              for (const r of results) if (r?.url) nativeHits.push({ url: String(r.url), title: String(r.title || "") });
             } else if (parsed.type === "error") {
               throw new Error(`Anthropic stream error: ${parsed.error?.message || JSON.stringify(parsed.error || parsed)}`);
             }
