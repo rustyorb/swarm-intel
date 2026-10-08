@@ -15,6 +15,23 @@ export interface Agent {
   // Per-agent model assignment chosen at the approval screen; when unset the
   // global agent model mapping applies.
   modelOverride?: { provider: string; model: string };
+  // Generated headshot served from /portraits/<key>.png; absent → pixel avatar.
+  portraitUrl?: string;
+}
+
+// Real pipeline stage of a running agent, driven by server `stage` SSE
+// events. Replaces the simulated progress bar.
+export type StageName = "queued" | "planning" | "searching" | "reading" | "reasoning" | "writing" | "done" | "failed";
+
+export interface AgentTelemetry {
+  stage: StageName;
+  wave?: number;
+  pages?: number;
+  hits?: number;
+  startedAt: number;
+  stageSince: number;
+  words: number;
+  finishedAt?: number;
 }
 
 export type SessionStatus = "idle" | "assembling" | "approval" | "researching" | "redteaming" | "synthesizing" | "completed" | "failed";
@@ -37,6 +54,9 @@ export interface SwarmConfig {
   // deliverables, research behaviour, success condition) before launch. The
   // user's input is kept verbatim beneath it. Default on; false bypasses.
   conditionDirective?: boolean;
+  // Generate a headshot per agent at assembly (Gemini image model, cached
+  // per persona on the server). Default on; false bypasses.
+  portraits?: boolean;
 }
 
 // A reusable specialist persona saved by the user. In Roster Mode the
@@ -51,6 +71,7 @@ export interface SavedAgent {
   colorTheme: string;
   savedAt: string;
   timesDeployed?: number;
+  portraitUrl?: string;
 }
 
 // A followable investigative thread from a fringe-mode Evidence Docket. The
@@ -118,6 +139,9 @@ export interface ResearchSession {
   // call sends) and this holds the short original for titles and relaunch.
   rawTopic?: string;
   timestamp: string;
+  // Wall-clock bounds of the run, for the stats strip.
+  startedAt?: number;
+  completedAt?: number;
   // Orchestrator's diagnosis of what the research need requires — the agents
   // are sprouted from this analysis.
   needAnalysis?: string;

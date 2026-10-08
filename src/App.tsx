@@ -62,11 +62,35 @@ import ClaimAtlas from "./components/ClaimAtlas";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import AgentLibrary from "./components/AgentLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig, sessionTitle } from "./types";
+import { Agent, AgentStatus, AgentTelemetry, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, StageName, SwarmConfig, sessionTitle } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
 const CONDITIONER_HEX = "#f59e0b";
+
+// Word floors per depth, used to scale the WRITING stage of the real
+// progress ring (the prompts set 800-1.2k / 2.5-4k / 5-8k word floors).
+const DEPTH_WORD_FLOOR: Record<string, number> = { recon: 1000, standard: 3000, deep: 6000 };
+const fmtClock = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+// Project real stage telemetry onto the {percent, statusText} shape the
+// cards and SwarmNetwork render. Every label here is something the agent
+// is actually doing right now.
+const deriveProgress = (t: AgentTelemetry, depth: string, now: number): { percent: number; statusText: string } => {
+  const floor = DEPTH_WORD_FLOOR[depth] ?? 3000;
+  switch (t.stage) {
+    case "queued": return { percent: 0, statusText: "QUEUED" };
+    case "planning": return { percent: 6, statusText: "PLANNING QUERIES" };
+    case "searching": return (t.wave ?? 1) >= 2 ? { percent: 32, statusText: "SEARCHING · WAVE 2" } : { percent: 18, statusText: "SEARCHING · WAVE 1" };
+    case "reading": return { percent: 42, statusText: `READING ${t.pages ?? 0} PAGES` };
+    case "reasoning": return { percent: 50, statusText: `MODEL REASONING ${fmtClock(now - t.stageSince)}` };
+    case "writing": return { percent: Math.min(95, 50 + Math.round(45 * Math.min(1, t.words / floor))), statusText: `WRITING · ${t.words.toLocaleString()} WORDS` };
+    case "done": return { percent: 100, statusText: `DONE · ${t.words.toLocaleString()} WORDS` };
+    case "failed": return { percent: 100, statusText: "FAILED" };
+  }
+};
 
 // Collapse blank filler some models emit after a report (Gemini Flash via
 // OpenRouter was observed streaming a million spaces after 12k chars of
@@ -513,6 +537,40 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"synthesis" | string>("synthesis");
   const [activeReportViewerId, setActiveReportViewerId] = useState<string>("synthesis");
   const [agentProgress, setAgentProgress] = useState<Record<string, { percent: number; statusText: string }>>({});
+  // Real per-agent pipeline telemetry (server `stage` SSE events). The
+  // {percent, statusText} map above is derived from it below.
+  const [agentTelemetry, setAgentTelemetry] = useState<Record<string, AgentTelemetry>>({});
+  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
+  // Text currently streaming (active agent report or the synthesis), flushed
+  // to state at most every 400 ms for the LiveWire pane.
+  const [liveText, setLiveText] = useState<string>("");
+  const [synthTelemetry, setSynthTelemetry] = useState<{ stage: StageName; stageSince: number; startedAt: number; words: number } | null>(null);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
+  // One controller per run; Reset aborts every in-flight pipeline request.
+  const runAbortRef = useRef<AbortController | null>(null);
+  const [directiveOpen, setDirectiveOpen] = useState(false);
+
+  // One-second tick while a run is live, so the reasoning timer and clocks
+  // move without any stream traffic.
+  const runIsLive = session?.status === "assembling" || session?.status === "researching" || session?.status === "redteaming" || session?.status === "synthesizing";
+  useEffect(() => {
+    if (!runIsLive) return;
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [runIsLive]);
+
+  // Project telemetry onto the {percent, statusText} map the cards and the
+  // network view render.
+  useEffect(() => {
+    const ids = Object.keys(agentTelemetry);
+    if (ids.length === 0) return;
+    const depth = session?.config?.depth ?? "standard";
+    setAgentProgress(prev => {
+      const next = { ...prev };
+      for (const id of ids) next[id] = deriveProgress(agentTelemetry[id], depth, nowTick);
+      return next;
+    });
+  }, [agentTelemetry, nowTick, session?.config?.depth]);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -1170,6 +1228,7 @@ export default function App() {
       id: "session_" + Date.now(),
       topic: searchTopic,
       rawTopic: searchTopic,
+      startedAt: Date.now(),
       timestamp: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       agents: [],
       status: "assembling",
@@ -1191,8 +1250,12 @@ export default function App() {
     addLog("ORCHESTRATOR", "Structuring research requirements into high-fidelity specialist dimensions...", "info");
 
     try {
+      runAbortRef.current?.abort();
+      const runAbort = new AbortController();
+      runAbortRef.current = runAbort;
       const response = await fetch("/api/research/initiate", {
         method: "POST",
+        signal: runAbort.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           topic: searchTopic,
@@ -1222,8 +1285,7 @@ export default function App() {
       if (conditioned) {
         const inWords = searchTopic.trim().split(/\s+/).filter(Boolean).length;
         const outWords = conditioned.split(/\s+/).filter(Boolean).length;
-        addLog("ORCHESTRATOR", `DIRECTIVE CONDITIONER: expanded ${inWords.toLocaleString()} → ${outWords.toLocaleString()} words.`, "system");
-        addLog("ORCHESTRATOR", conditioned, "info");
+        addLog("ORCHESTRATOR", `DIRECTIVE CONDITIONER: expanded ${inWords.toLocaleString()} → ${outWords.toLocaleString()} words. Open it from the DIRECTIVE button in the run header.`, "system");
         setSession(prev => prev ? { ...prev, topic: conditioned, rawTopic: searchTopic } : null);
       } else if (!priorContext && swarmConfig.conditionDirective !== false) {
         addLog("ORCHESTRATOR", "Directive Conditioner fell back to the raw topic (see server log).", "warning");
@@ -1284,6 +1346,10 @@ export default function App() {
       });
 
     } catch (err: any) {
+      if (err?.name === "AbortError") {
+        addLog("SYSTEM", "Assembly cancelled.", "warning");
+        return;
+      }
       addLog("SYSTEM", `Assembly Error: ${err.message}`, "warning");
       setSession(prev => prev ? { ...prev, status: "failed", error: err.message } : null);
     }
@@ -1352,42 +1418,15 @@ export default function App() {
       return copy;
     });
 
-    // List of simulated operations
-    const simOperations = [
-      "SCRAPING_ACADEMIC_REPOS",
-      "MAPPING_CORRELATIONS",
-      "ISOLATING_ANOMALIES",
-      "SIMULATING_MODELS",
-      "CROSS_REFERENCING_PATENTS",
-      "COMPILING_INSIGHT_DATA",
-      "FORMATTING_REPORT_FRAG"
-    ];
-
-    // Helper to run simulated progress alongside the API request
-    const runSimulatedProgress = (agentId: string, agentName: string, color: string) => {
-      let currentPercent = 0;
-      const interval = setInterval(() => {
-        currentPercent += Math.floor(Math.random() * 8) + 4;
-        if (currentPercent >= 98) {
-          currentPercent = 98;
-          clearInterval(interval);
-        }
-        
-        const opIndex = Math.min(Math.floor(currentPercent / 15), simOperations.length - 1);
-        const statusText = simOperations[opIndex];
-
-        setAgentProgress(prev => ({
-          ...prev,
-          [agentId]: { percent: currentPercent, statusText }
-        }));
-
-        // Log occasionally
-        if (currentPercent % 24 === 0) {
-          addLog(agentName, `${statusText} - Analysis currently at ${currentPercent}%`, "info", color);
-        }
-      }, 350 + Math.random() * 200);
-
-      return interval;
+    // Real stage telemetry: the server emits `stage` SSE events as the agent
+    // actually moves through planning → searching → reading → reasoning →
+    // writing. Nothing here is simulated.
+    const stageFor = (agentId: string, patch: Partial<AgentTelemetry>) => {
+      setAgentTelemetry(prev => {
+        const cur = prev[agentId] ?? { stage: "queued" as StageName, startedAt: Date.now(), stageSince: Date.now(), words: 0 };
+        const stageChanged = patch.stage !== undefined && patch.stage !== cur.stage;
+        return { ...prev, [agentId]: { ...cur, ...patch, stageSince: stageChanged ? Date.now() : cur.stageSince } };
+      });
     };
 
     // Run each agent's model exploration sequentially to prevent 429 rate limit / quota collisions
@@ -1406,11 +1445,26 @@ export default function App() {
 
       addLog(agent.name, `Thread active. Initializing primary investigative query...`, "info", agent.colorTheme);
       
-      const intervalId = runSimulatedProgress(agent.id, agent.name, agent.colorTheme);
+      stageFor(agent.id, { stage: "planning", startedAt: Date.now(), words: 0 });
+      setActiveAgentId(agent.id);
+      setLiveText("");
+      let lastFlush = 0;
+      let wordCount = 0;
+      // Flush the growing report to state at most ~2x/sec. Re-rendering the
+      // whole report on every chunk is what white-screened large runs.
+      const flushReport = (text: string, force = false) => {
+        const now = Date.now();
+        if (!force && now - lastFlush < 400) return;
+        lastFlush = now;
+        setLiveText(text);
+        setAgentTelemetry(prev => (prev[agent.id] ? { ...prev, [agent.id]: { ...prev[agent.id], words: wordCount } } : prev));
+        setSession(prev => prev ? { ...prev, agents: prev.agents.map(a => a.id === agent.id ? { ...a, report: text } : a) } : null);
+      };
 
       try {
         const response = await fetch("/api/research/agent-run-stream", {
           method: "POST",
+          signal: runAbortRef.current?.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             topic: currentSession.topic,
@@ -1472,12 +1526,14 @@ export default function App() {
                 }
                 if (data?.type === "chunk" && data.text) {
                   report += data.text;
-                  setSession(prev => {
-                    if (!prev) return null;
-                    return {
-                      ...prev,
-                      agents: prev.agents.map(a => a.id === agent.id ? { ...a, report } : a)
-                    };
+                  wordCount += (data.text.match(/\S+/g) || []).length;
+                  flushReport(report);
+                } else if (data?.type === "stage" && data.stage) {
+                  stageFor(agent.id, {
+                    stage: data.stage as StageName,
+                    ...(data.wave !== undefined ? { wave: data.wave } : {}),
+                    ...(data.pages !== undefined ? { pages: data.pages } : {}),
+                    ...(data.hits !== undefined ? { hits: data.hits } : {}),
                   });
                 } else if (data?.type === "grounding") {
                   // Surface whether this run is actually internet-grounded —
@@ -1513,13 +1569,8 @@ export default function App() {
           throw new Error("Provider returned no content. Check API key and model in Settings, and the server console for details.");
         }
 
-        clearInterval(intervalId);
-
-        // Complete progress
-        setAgentProgress(prev => ({
-          ...prev,
-          [agent.id]: { percent: 100, statusText: "SYNTHESIS_READY" }
-        }));
+        flushReport(report, true);
+        stageFor(agent.id, { stage: "done", finishedAt: Date.now(), words: (report.match(/\S+/g) || []).length });
 
         addLog(agent.name, "Critical data compiled. Report submitted to the central queue.", "success", agent.colorTheme);
 
@@ -1534,7 +1585,12 @@ export default function App() {
 
         results.push({ agentId: agent.id, report: cleanReport, name: agent.name, role: agent.role });
       } catch (err: any) {
-        clearInterval(intervalId);
+        if (err?.name === "AbortError") {
+          addLog("SYSTEM", "Run cancelled — in-flight requests aborted.", "warning");
+          stageFor(agent.id, { stage: "failed", finishedAt: Date.now() });
+          return;
+        }
+        stageFor(agent.id, { stage: "failed", finishedAt: Date.now() });
         setAgentProgress(prev => ({
           ...prev,
           [agent.id]: { percent: 100, statusText: "FAILED" }
@@ -1571,6 +1627,7 @@ export default function App() {
       addLog("ORCHESTRATOR", "Catalytic scan — sweeping reports for unassigned loaded terms...", "system");
       const scanResponse = await fetch("/api/research/catalytic-scan", {
         method: "POST",
+        signal: runAbortRef.current?.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           topic: currentSession.topic,
@@ -1613,6 +1670,7 @@ export default function App() {
         try {
           const response = await fetch("/api/research/redteam-stream", {
             method: "POST",
+            signal: runAbortRef.current?.signal,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               topic: currentSession.topic,
@@ -1742,8 +1800,13 @@ export default function App() {
         catalyticTerms: currentSession.catalyticTerms || [],
       };
 
+      setActiveAgentId(null);
+      setLiveText("");
+      let synthWords = 0;
+      setSynthTelemetry({ stage: "reasoning", stageSince: Date.now(), startedAt: Date.now(), words: 0 });
       const response = await fetch("/api/research/synthesize-stream", {
         method: "POST",
+        signal: runAbortRef.current?.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -1799,6 +1862,7 @@ export default function App() {
               }
               if (data?.type === "chunk" && data.text) {
                 finalReport += data.text;
+                synthWords += (data.text.match(/\S+/g) || []).length;
                 // Flush to state at most ~2x/sec: rendering + re-parsing the
                 // whole growing report on EVERY chunk is what white-screened
                 // large runs. Completion (line below the loop) writes the
@@ -1807,11 +1871,15 @@ export default function App() {
                 if (now - lastFlush > 400) {
                   lastFlush = now;
                   const snapshot = finalReport;
+                  setLiveText(snapshot);
+                  setSynthTelemetry(prev => prev ? { ...prev, words: synthWords } : prev);
                   setSession(prev => {
                     if (!prev) return null;
                     return { ...prev, synthesizedReport: snapshot };
                   });
                 }
+              } else if (data?.type === "stage" && data.stage) {
+                setSynthTelemetry(prev => ({ stage: data.stage as StageName, stageSince: Date.now(), startedAt: prev?.startedAt ?? Date.now(), words: prev?.words ?? 0 }));
               } else if (data?.type === "done") {
                 if (data.text) {
                   finalReport = data.text;
@@ -1863,10 +1931,12 @@ export default function App() {
 
       addLog("SYSTEM", "Investigation Complete. All channels returned to baseline idle status.", "system");
 
+      setSynthTelemetry(prev => prev ? { ...prev, stage: "done", words: (finalReport.match(/\S+/g) || []).length } : prev);
       const finalSession: ResearchSession = {
         ...currentSession,
         synthesizedReport: finalReport,
         status: "completed",
+        completedAt: Date.now(),
         ...(critiques.length ? { critiques } : {}),
         ...(caseLeads ? { leads: caseLeads } : {}),
       };
@@ -1876,6 +1946,10 @@ export default function App() {
       setActiveReportViewerId("synthesis"); // Default view to synthesis
 
     } catch (err: any) {
+      if (err?.name === "AbortError") {
+        addLog("SYSTEM", "Synthesis cancelled.", "warning");
+        return;
+      }
       addLog("ORCHESTRATOR", `Synthesis faulted: ${err.message}`, "warning");
       setSession(prev => prev ? { ...prev, status: "failed", error: err.message } : null);
     }
@@ -1988,6 +2062,14 @@ export default function App() {
           <button
             id="btn-new-investigation"
             onClick={() => {
+              // Reset only ever stopped the page from listening; the loops
+              // kept running against the server. Abort them.
+              runAbortRef.current?.abort();
+              runAbortRef.current = null;
+              setAgentTelemetry({});
+              setSynthTelemetry(null);
+              setActiveAgentId(null);
+              setLiveText("");
               setSession(null);
               setTopic("");
               setLogs([]);
