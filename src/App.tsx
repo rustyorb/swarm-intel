@@ -983,29 +983,59 @@ export default function App() {
     }
   }, [settings]);
 
-  // Save history helper
+  // Save history helper. State only — persistence happens in the effect
+  // below. A localStorage write inside a state updater runs during React's
+  // render, where a QuotaExceededError escapes every try/catch and crashes
+  // the whole UI (seen 2026-10-08 with a session carrying 3M chars of model
+  // filler).
   const saveToHistory = (newSession: ResearchSession) => {
-    try {
-      setHistory(prev => {
-        const filtered = prev.filter(s => s.id !== newSession.id);
-        const updated = [newSession, ...filtered].slice(0, 50); // keep last 50
-        localStorage.setItem("research_swarm_history", JSON.stringify(updated));
-        return updated;
-      });
-    } catch (e) {
-      console.error("Failed to save history:", e);
-    }
+    setHistory(prev => {
+      const filtered = prev.filter(s => s.id !== newSession.id);
+      return [newSession, ...filtered].slice(0, 50); // keep last 50
+    });
   };
 
-  // Persist an updated history array to localStorage as we mutate it.
-  const persistHistory = (updated: ResearchSession[]) => {
-    try {
-      localStorage.setItem("research_swarm_history", JSON.stringify(updated));
-    } catch (e) {
-      console.error("Failed to save history:", e);
+  // Kept as an identity for the mutation helpers; the effect persists.
+  const persistHistory = (updated: ResearchSession[]) => updated;
+
+  // Drop filler whitespace from a session's report bodies before storing.
+  const shrinkSession = (s: ResearchSession): ResearchSession => ({
+    ...s,
+    agents: s.agents.map(a => (a.report ? { ...a, report: sanitizeReportText(a.report) } : a)),
+    ...(s.synthesizedReport ? { synthesizedReport: sanitizeReportText(s.synthesizedReport) } : {}),
+  });
+
+  // Write history to localStorage without ever throwing. On a quota error:
+  // first shrink report bodies, then evict the oldest non-favorite sessions
+  // one at a time until the write fits. Returns what was actually stored.
+  const writeHistorySafely = (list: ResearchSession[]): ResearchSession[] => {
+    let candidate = list;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      try {
+        localStorage.setItem("research_swarm_history", JSON.stringify(candidate));
+        return candidate;
+      } catch (e) {
+        if (attempt === 0) {
+          candidate = candidate.map(shrinkSession);
+          continue;
+        }
+        const fromEnd = [...candidate].reverse().findIndex(s => !s.favorite);
+        if (fromEnd < 0 || candidate.length === 0) {
+          console.error("History cannot fit in localStorage even after eviction:", e);
+          return candidate;
+        }
+        const dropAt = candidate.length - 1 - fromEnd;
+        console.warn(`History exceeded the storage quota — evicting "${sessionTitle(candidate[dropAt]).slice(0, 60)}"`);
+        candidate = candidate.filter((_, i) => i !== dropAt);
+      }
     }
-    return updated;
+    return candidate;
   };
+
+  useEffect(() => {
+    const stored = writeHistorySafely(history);
+    if (stored.length !== history.length) setHistory(stored);
+  }, [history]);
 
   // Library mutation helpers — each updates state AND localStorage.
   const toggleFavorite = (id: string) => {
@@ -1079,12 +1109,18 @@ export default function App() {
     if (sessionSaveTimer.current) return;
     sessionSaveTimer.current = setTimeout(() => {
       sessionSaveTimer.current = null;
+      const current = sessionSaveRef.current;
+      if (!current) return;
       try {
-        if (sessionSaveRef.current) {
-          localStorage.setItem("research_swarm_current_session", JSON.stringify(sessionSaveRef.current));
-        }
+        localStorage.setItem("research_swarm_current_session", JSON.stringify(current));
       } catch (e) {
-        console.error("Failed to save session:", e);
+        // Quota: retry once with filler stripped from report bodies.
+        try {
+          localStorage.setItem("research_swarm_current_session", JSON.stringify(shrinkSession(current)));
+          console.warn("Session exceeded the storage quota — saved with report filler stripped.");
+        } catch (e2) {
+          console.error("Failed to save session:", e2);
+        }
       }
     }, 1000);
   }, [session]);
