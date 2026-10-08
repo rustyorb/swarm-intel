@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   Play, 
   RotateCcw, 
@@ -56,6 +56,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import PixelAvatar from "./components/PixelAvatar";
 import SwarmNetwork from "./components/SwarmNetwork";
+import LiveWire from "./components/LiveWire";
 import InterrogationRoom from "./components/InterrogationRoom";
 import ReaderMode from "./components/ReaderMode";
 import ClaimAtlas from "./components/ClaimAtlas";
@@ -67,9 +68,58 @@ import { Agent, AgentStatus, AgentTelemetry, AtlasClaim, Lead, PriorContext, Red
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
 const CONDITIONER_HEX = "#f59e0b";
+const PORTRAIT_HEX = "#5bb797";
 
 // Word floors per depth, used to scale the WRITING stage of the real
 // progress ring (the prompts set 800-1.2k / 2.5-4k / 5-8k word floors).
+// Renders a conditioned research directive (markdown with a fenced
+// AUTHORITATIVE CONTEXT block) with a jump list built from its headers.
+function DirectiveDocument({ text }: { text: string }) {
+  const headers = useMemo(() =>
+    text.split("\n")
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => /^#\s+/.test(l))
+      .map(({ l, i }) => ({ title: l.replace(/^#\s+/, "").replace(/\s*\(verbatim user input.*$/, "").trim(), id: `dir-h-${i}` })),
+    [text]);
+  let hIdx = -1;
+  const lineIds = useMemo(() => text.split("\n").map((l, i) => (/^#\s+/.test(l) ? `dir-h-${i}` : null)), [text]);
+  const ids = lineIds.filter(Boolean) as string[];
+  return (
+    <div className="flex flex-col lg:flex-row gap-5">
+      <nav className="lg:w-56 flex-shrink-0 lg:sticky lg:top-0 self-start">
+        <div className="text-[9px] font-mono uppercase tracking-widest font-bold mb-2" style={{ color: CONDITIONER_HEX }}>Sections</div>
+        <ul className="space-y-1">
+          {headers.map(h => (
+            <li key={h.id}>
+              <a href={`#${h.id}`} className="text-[10px] font-mono text-text-muted hover:text-text-primary block truncate" title={h.title}>{h.title}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <div className="min-w-0 flex-1 space-y-2 text-xs leading-relaxed font-sans text-text-secondary">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            h1: ({ node, ...props }) => { hIdx += 1; return <h1 id={ids[hIdx]} className="text-base font-bold text-text-primary mt-6 mb-2 font-display scroll-mt-4 border-b border-border-warm pb-1.5" {...props} />; },
+            h2: ({ node, ...props }) => <h2 className="text-sm font-semibold mt-4 mb-2 font-display" style={{ color: CONDITIONER_HEX }} {...props} />,
+            h3: ({ node, ...props }) => <h3 className="text-xs font-semibold mt-3 mb-1.5 font-display uppercase tracking-wider" style={{ color: CONDITIONER_HEX }} {...props} />,
+            p: ({ node, ...props }) => <p className="mb-2.5 leading-relaxed text-text-secondary text-xs" {...props} />,
+            ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2.5 space-y-1" {...props} />,
+            ol: ({ node, ...props }) => <ol className="list-decimal pl-5 mb-2.5 space-y-1" {...props} />,
+            li: ({ node, ...props }) => <li className="text-text-secondary text-xs" {...props} />,
+            blockquote: ({ node, ...props }) => <blockquote className="border-l-2 bg-bg-surface px-3 py-2 rounded-r-lg my-2.5 text-text-primary text-xs font-semibold" style={{ borderColor: CONDITIONER_HEX }} {...props} />,
+            strong: ({ node, ...props }) => <strong className="font-bold text-text-primary" {...props} />,
+            code: ({ node, ...props }) => <code className="bg-bg-primary px-1 py-0.5 rounded font-mono text-[11px] border border-border-warm" {...props} />,
+            hr: () => <hr className="my-5 border-border-warm" />,
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 const DEPTH_WORD_FLOOR: Record<string, number> = { recon: 1000, standard: 3000, deep: 6000 };
 const fmtClock = (ms: number): string => {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -467,6 +517,44 @@ function MissionParameters({
           </span>
         </button>
       </div>
+
+      {/* Agent Portraits toggle */}
+      <div className={compact ? "mt-3" : "mt-4"}>
+        <button
+          onClick={() => onChange({ ...config, portraits: config.portraits === false })}
+          className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer"
+          title="Generate a headshot for each specialist at assembly (Gemini image model, cached per persona)"
+        >
+          <div className="flex items-center gap-2 min-w-0 text-left">
+            <User
+              className="w-3.5 h-3.5 flex-shrink-0 transition-colors"
+              style={{ color: config.portraits !== false ? PORTRAIT_HEX : undefined }}
+            />
+            <div className="min-w-0">
+              <div
+                className="text-[9px] font-mono uppercase tracking-widest font-bold transition-colors"
+                style={{ color: config.portraits !== false ? PORTRAIT_HEX : undefined }}
+              >
+                Agent Portraits
+              </div>
+              {!compact && (
+                <div className="text-[9px] font-mono text-text-muted mt-0.5">
+                  Generated headshots for every specialist
+                </div>
+              )}
+            </div>
+          </div>
+          <span
+            className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${config.portraits !== false ? "" : "bg-border-warm"}`}
+            style={config.portraits !== false ? { background: PORTRAIT_HEX } : undefined}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary transition-transform"
+              style={{ transform: config.portraits !== false ? "translateX(16px)" : "translateX(0)" }}
+            />
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -549,6 +637,8 @@ export default function App() {
   // One controller per run; Reset aborts every in-flight pipeline request.
   const runAbortRef = useRef<AbortController | null>(null);
   const [directiveOpen, setDirectiveOpen] = useState(false);
+  // LiveWire: null follows the live channel; an id pins a finished report.
+  const [liveSelectedId, setLiveSelectedId] = useState<string | null>(null);
 
   // One-second tick while a run is live, so the reasoning timer and clocks
   // move without any stream traffic.
@@ -707,12 +797,13 @@ export default function App() {
           ...(parsed.fringeMode === true ? { fringeMode: true } : {}),
           ...(parsed.rosterMode === true ? { rosterMode: true } : {}),
           conditionDirective: parsed.conditionDirective !== false,
+          portraits: parsed.portraits !== false,
         };
       }
     } catch (e) {
       // Ignore malformed config
     }
-    return { agentCount: "auto", depth: "standard", conditionDirective: true };
+    return { agentCount: "auto", depth: "standard", conditionDirective: true, portraits: true };
   });
 
   useEffect(() => {
@@ -747,12 +838,12 @@ export default function App() {
 
   // Saving an already-saved persona (same name+role) refreshes its specialty
   // and color instead of duplicating it.
-  const saveAgentToLibrary = (agent: { name: string; role: string; investigativeAngle: string; colorTheme: string }) => {
+  const saveAgentToLibrary = (agent: { name: string; role: string; investigativeAngle: string; colorTheme: string; portraitUrl?: string }) => {
     setAgentLibrary(prev => {
       const existing = prev.find(s => s.name === agent.name && s.role === agent.role);
       if (existing) {
         return prev.map(s => s.id === existing.id
-          ? { ...s, investigativeAngle: agent.investigativeAngle, colorTheme: agent.colorTheme }
+          ? { ...s, investigativeAngle: agent.investigativeAngle, colorTheme: agent.colorTheme, ...(agent.portraitUrl ? { portraitUrl: agent.portraitUrl } : {}) }
           : s);
       }
       return [...prev, {
@@ -762,9 +853,39 @@ export default function App() {
         investigativeAngle: agent.investigativeAngle,
         colorTheme: agent.colorTheme,
         savedAt: new Date().toLocaleDateString(),
+        ...(agent.portraitUrl ? { portraitUrl: agent.portraitUrl } : {}),
       }];
     });
     addLog("SYSTEM", `${agent.name} (${agent.role}) saved to the Agent Library.`, "success", agent.colorTheme);
+  };
+
+  // Agent portraits: one generated headshot per persona, cached on the
+  // server by name+role. Fire-and-forget; a miss leaves the pixel avatar.
+  const requestPortraits = (list: Agent[], fringe: boolean) => {
+    if (swarmConfig.portraits === false) return;
+    list.forEach(async (agent) => {
+      if (agent.portraitUrl) return;
+      try {
+        const r = await fetch("/api/research/agent-portrait", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: agent.name,
+            role: agent.role,
+            investigativeAngle: agent.investigativeAngle,
+            colorTheme: agent.colorTheme,
+            fringe,
+            settings: { providers: { gemini: { apiKey: (settings as any)?.providers?.gemini?.apiKey || "" } } },
+          }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!data?.url) return;
+        setSession(prev => prev ? { ...prev, agents: prev.agents.map(a => a.id === agent.id ? { ...a, portraitUrl: data.url } : a) } : null);
+        setAgentLibrary(prev => prev.map(s => s.name === agent.name && s.role === agent.role && !s.portraitUrl ? { ...s, portraitUrl: data.url } : s));
+      } catch {
+        // Portraits are decoration; never surface as an error.
+      }
+    });
   };
 
   // Custom specialist recruitment modal (approval stage)
@@ -893,6 +1014,10 @@ export default function App() {
   const handleApproveAndStartResearch = () => {
     if (!session) return;
     const updated: ResearchSession = { ...session, status: "researching" };
+    setAgentTelemetry({});
+    setSynthTelemetry(null);
+    setLiveSelectedId(null);
+    setLiveText("");
     setSession(updated);
     setTimeout(() => {
       runParallelResearch(updated);
@@ -984,6 +1109,7 @@ export default function App() {
         ...data.agent,
         status: "idle" as AgentStatus
       };
+      requestPortraits([newAgent], !!session.config?.fringeMode);
 
       setSession(prev => {
         if (!prev) return null;
@@ -1010,10 +1136,13 @@ export default function App() {
   const getActiveReportContentAndTitle = (): { text: string; title: string } => {
     if (!session) return { text: "", title: "" };
     if (activeReportViewerId === "synthesis") {
-      return { 
-        text: session.synthesizedReport || "", 
-        title: `${sessionTitle(session)} - Consolidated Synthesis` 
+      return {
+        text: session.synthesizedReport || "",
+        title: `${sessionTitle(session)} - Consolidated Synthesis`
       };
+    }
+    if (activeReportViewerId === "directive") {
+      return { text: session.topic, title: `${sessionTitle(session)} - Research Directive` };
     }
     const agent = session.agents.find(a => a.id === activeReportViewerId);
     return { 
@@ -1323,6 +1452,7 @@ export default function App() {
 
       // Animate agent assembly one by one
       setSession(prev => prev ? { ...prev, agents: loadedAgents, needAnalysis } : null);
+      requestPortraits(loadedAgents, !!swarmConfig.fringeMode);
       
       for (let i = 0; i <= loadedAgents.length; i++) {
         setAssemblyStep(i);
@@ -2456,6 +2586,17 @@ export default function App() {
                       )}
                     </div>
                   </div>
+                  {session.topic !== sessionTitle(session) && (
+                    <button
+                      onClick={() => setDirectiveOpen(true)}
+                      className="flex items-center gap-2 flex-shrink-0 px-3 py-1.5 rounded-xl border font-mono text-[10px] font-bold uppercase tracking-widest cursor-pointer transition-all hover:brightness-110"
+                      style={{ color: CONDITIONER_HEX, borderColor: `${CONDITIONER_HEX}66`, background: `${CONDITIONER_HEX}12` }}
+                      title="Open the conditioned research directive the swarm is running on"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Directive · {(session.topic.match(/\S+/g) || []).length.toLocaleString()} words
+                    </button>
+                  )}
                   <div className="flex items-center gap-2 flex-shrink-0 bg-bg-primary px-3.5 py-1.5 rounded-xl border border-border-warm font-mono text-[11px]">
                     {session.status === "approval" ? (
                       <ShieldCheck className="text-accent-warm w-3.5 h-3.5" />
@@ -2649,6 +2790,23 @@ export default function App() {
                 );
               })()}
 
+              {/* LiveWire — what the swarm is actually producing, as it streams */}
+              {(session.status === "researching" || session.status === "redteaming" || session.status === "synthesizing") && (
+                <LiveWire
+                  agents={session.agents}
+                  telemetry={agentTelemetry}
+                  activeAgentId={activeAgentId}
+                  selectedId={liveSelectedId}
+                  onSelect={setLiveSelectedId}
+                  liveText={liveText}
+                  mode={session.status === "synthesizing" ? "synthesis" : session.status === "redteaming" ? "redteam" : "agent"}
+                  synth={synthTelemetry}
+                  now={nowTick}
+                  getColorHex={getAgentColorHex}
+                  accentHex="#fb923c"
+                />
+              )}
+
               {/* Grid of active research specialists */}
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest font-mono">
@@ -2730,7 +2888,7 @@ export default function App() {
                       {/* Header: portrait, nameplate, class, level */}
                       <div className="flex items-start gap-3 px-4 pt-3.5">
                         <div className="rpg-portrait">
-                          <PixelAvatar name={agent.name} role={agent.role} themeColor={colorTheme} size="md" />
+                          <PixelAvatar name={agent.name} role={agent.role} themeColor={colorTheme} size="md" portraitUrl={agent.portraitUrl} />
                         </div>
                         <div className="min-w-0 flex-1">
                           <h4 className="rpg-nameplate truncate">{agent.name}</h4>
@@ -3046,6 +3204,26 @@ export default function App() {
 
                   <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
 
+                  {/* Research Directive (when the conditioner expanded the topic) */}
+                  {session.topic !== sessionTitle(session) && (
+                    <>
+                      <button
+                        id="tab-directive"
+                        onClick={() => setActiveReportViewerId("directive")}
+                        className="px-4 h-14 flex items-center gap-2 border-b-2 font-mono text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap"
+                        style={
+                          activeReportViewerId === "directive"
+                            ? { borderColor: CONDITIONER_HEX, color: "var(--color-text-primary)", background: "var(--color-bg-primary)" }
+                            : { borderColor: "transparent" }
+                        }
+                      >
+                        <Sparkles className="w-3.5 h-3.5" style={{ color: CONDITIONER_HEX }} />
+                        <span className={activeReportViewerId === "directive" ? "text-text-primary" : "text-text-muted"}>Directive</span>
+                      </button>
+                      <div className="h-14 w-[1px] bg-border-warm flex-shrink-0"></div>
+                    </>
+                  )}
+
                   {/* Individual Specialist Dossiers */}
                   {session.agents.map((agent) => (
                     <button
@@ -3204,7 +3382,18 @@ export default function App() {
               ) : (
               <div id="report-view-scroll" className="flex-1 overflow-y-auto p-6 md:p-8 bg-bg-primary">
                 <div className="max-w-3xl mx-auto">
-                  {activeReportViewerId === "synthesis" ? (
+                  {activeReportViewerId === "directive" ? (
+                    <article className="max-w-none">
+                      <div className="mb-6 pb-5 border-b border-border-warm">
+                        <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest mb-2" style={{ color: CONDITIONER_HEX }}>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Research Directive · {(session.topic.match(/\S+/g) || []).length.toLocaleString()} words
+                        </div>
+                        <p className="text-xs text-text-muted font-mono">What every specialist and the synthesis were actually given. Your original input is fenced verbatim at the end.</p>
+                      </div>
+                      <DirectiveDocument text={session.topic} />
+                    </article>
+                  ) : activeReportViewerId === "synthesis" ? (
                     /* Unified Consolidated Synthesis Report */
                     <article className="prose prose-invert max-w-none text-text-secondary">
                       <div className="mb-8 pb-6 border-b border-border-warm">
@@ -3218,6 +3407,39 @@ export default function App() {
                         <p className="text-xs text-text-muted font-mono">
                           Swarm Report ID: <span className="text-text-secondary">{session.id}</span> • Completed: <span className="text-text-secondary">{session.timestamp}</span>
                         </p>
+                        {/* Run stats — computed from what the session actually holds */}
+                        {(() => {
+                          const reports = session.agents.filter(a => a.report);
+                          const agentWords = reports.reduce((n, a) => n + ((a.report || "").match(/\S+/g) || []).length, 0);
+                          const synthWords = ((session.synthesizedReport || "").match(/\S+/g) || []).length;
+                          const urls = new Set<string>();
+                          for (const a of reports) for (const m of (a.report || "").matchAll(/https?:\/\/[^\s)\]>"']+/g)) urls.add(m[0].replace(/[.,;:]+$/, ""));
+                          const modes = session.agents.reduce((acc, a) => { const m = a.grounding?.mode; if (m) acc[m] = (acc[m] || 0) + 1; return acc; }, {} as Record<string, number>);
+                          const elapsed = session.startedAt && session.completedAt ? session.completedAt - session.startedAt : null;
+                          const Stat = ({ label, value, warn }: { label: string; value: string; warn?: boolean }) => (
+                            <div className="px-3 py-2 rounded-lg border border-border-warm bg-bg-surface min-w-[92px]">
+                              <div className="text-[8px] font-mono uppercase tracking-widest text-text-muted">{label}</div>
+                              <div className={`text-sm font-bold font-mono ${warn ? "text-error" : "text-text-primary"}`}>{value}</div>
+                            </div>
+                          );
+                          return (
+                            <div className="flex flex-wrap gap-2 mt-4">
+                              {elapsed !== null && <Stat label="Elapsed" value={fmtClock(elapsed)} />}
+                              <Stat label="Specialists" value={`${reports.length}/${session.agents.length}`} />
+                              <Stat label="Report words" value={agentWords.toLocaleString()} />
+                              <Stat label="Synthesis" value={`${synthWords.toLocaleString()} w`} />
+                              <Stat label="Sources cited" value={urls.size.toLocaleString()} />
+                              {Object.keys(modes).length > 0 && (
+                                <Stat
+                                  label="Grounding"
+                                  value={[modes.injected ? `${modes.injected} live` : null, modes.native ? `${modes.native} native` : null, modes.none ? `${modes.none} NONE` : null].filter(Boolean).join(" · ")}
+                                  warn={!!modes.none}
+                                />
+                              )}
+                              {session.config?.depth && <Stat label="Depth" value={session.config.depth.toUpperCase()} />}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {session.synthesizedReport ? (
@@ -3259,7 +3481,7 @@ export default function App() {
                         <article className="prose prose-invert max-w-none">
                           <div className="mb-8 pb-6 border-b border-border-warm flex flex-col md:flex-row md:items-center justify-between gap-4">
                             <div className="flex items-center gap-4">
-                              <PixelAvatar name={selectedAgent.name} role={selectedAgent.role} themeColor={selectedAgent.colorTheme} size="md" />
+                              <PixelAvatar name={selectedAgent.name} role={selectedAgent.role} themeColor={selectedAgent.colorTheme} size="md" portraitUrl={selectedAgent.portraitUrl} />
                               <div>
                                 <div className="flex items-center gap-2">
                                   <span className="text-[10px] font-bold font-mono uppercase tracking-widest text-text-muted bg-bg-primary px-2 py-0.5 border border-border-warm rounded">
@@ -3498,6 +3720,43 @@ export default function App() {
       )}
 
       {/* Completed Agent Dossier View Modal */}
+      {/* Directive drawer — the conditioned research directive the run is on */}
+      {directiveOpen && session && (
+        <div className="fixed inset-0 z-50 flex justify-end" onClick={() => setDirectiveOpen(false)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-3xl h-full bg-bg-surface border-l border-border-warm flex flex-col shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: CONDITIONER_HEX }} />
+            <div className="p-5 border-b border-border-warm flex items-center justify-between bg-bg-primary/50 flex-shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest" style={{ color: CONDITIONER_HEX }}>
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Research Directive · {(session.topic.match(/\S+/g) || []).length.toLocaleString()} words
+                </div>
+                <p className="text-[10px] text-text-muted font-mono mt-1 truncate">Conditioned from: "{sessionTitle(session)}"</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={() => { navigator.clipboard?.writeText(session.topic).catch(() => {}); addLog("SYSTEM", "Directive copied to clipboard.", "success"); }}
+                  className="h-8 px-3 flex items-center gap-1.5 bg-bg-primary border border-border-warm text-text-secondary hover:text-accent-warm rounded-lg text-[10px] font-mono uppercase tracking-wider cursor-pointer"
+                  title="Copy the full directive"
+                >
+                  <Copy className="w-3.5 h-3.5" /> Copy
+                </button>
+                <button onClick={() => setDirectiveOpen(false)} className="h-8 w-8 flex items-center justify-center bg-bg-primary border border-border-warm text-text-muted hover:text-text-primary rounded-lg cursor-pointer" title="Close">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <DirectiveDocument text={session.topic} />
+            </div>
+          </div>
+        </div>
+      )}
+
       {viewingCompletedAgent && (
         <div className="fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="w-full max-w-3xl h-[85vh] bg-bg-surface border border-border-warm rounded-2xl flex flex-col overflow-hidden shadow-2xl relative">
@@ -3505,11 +3764,12 @@ export default function App() {
             {/* Header */}
             <div className="p-5 border-b border-border-warm flex items-center justify-between bg-bg-primary/50 flex-shrink-0">
               <div className="flex items-center gap-3">
-                <PixelAvatar 
-                  name={viewingCompletedAgent.name} 
-                  role={viewingCompletedAgent.role} 
-                  themeColor={viewingCompletedAgent.colorTheme} 
-                  size="sm" 
+                <PixelAvatar
+                  name={viewingCompletedAgent.name}
+                  role={viewingCompletedAgent.role}
+                  themeColor={viewingCompletedAgent.colorTheme}
+                  size="sm"
+                  portraitUrl={viewingCompletedAgent.portraitUrl}
                 />
                 <div>
                   <div className="flex items-center gap-2">

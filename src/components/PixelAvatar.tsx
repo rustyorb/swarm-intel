@@ -5,6 +5,9 @@ interface PixelAvatarProps {
   role: string;
   themeColor: string;
   size?: "sm" | "md" | "lg" | "xl";
+  // Generated headshot (/portraits/<key>.png). When present it fills the
+  // same frame; if it fails to load the pixel grid comes back.
+  portraitUrl?: string;
 }
 
 const colorMap: Record<string, { bg: string; pixel: string; border: string }> = {
@@ -18,7 +21,31 @@ const colorMap: Record<string, { bg: string; pixel: string; border: string }> = 
   fuchsia: { bg: "bg-fuchsia-950/40", pixel: "bg-fuchsia-400", border: "border-fuchsia-500/30" },
 };
 
-export default function PixelAvatar({ name, role, themeColor, size = "md" }: PixelAvatarProps) {
+export default function PixelAvatar({ name, role, themeColor, size = "md", portraitUrl }: PixelAvatarProps) {
+  const [imgFailed, setImgFailed] = React.useState(false);
+  React.useEffect(() => { setImgFailed(false); }, [portraitUrl]);
+
+  if (portraitUrl && !imgFailed) {
+    const frame = colorMap[themeColor] || colorMap.blue;
+    const dims = { sm: "w-8 h-8", md: "w-12 h-12", lg: "w-16 h-16", xl: "w-24 h-24" }[size];
+    return (
+      <div
+        id={`avatar-${name.replace(/\s+/g, "-").toLowerCase()}`}
+        className={`${dims} aspect-square rounded-xl border overflow-hidden flex-shrink-0 ${frame.border} ${frame.bg} shadow-inner`}
+        title={`${name} — ${role}`}
+      >
+        <img
+          src={portraitUrl}
+          alt={`${name}, ${role}`}
+          className="w-full h-full object-cover"
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          style={{ filter: "saturate(0.92) contrast(1.04)" }}
+        />
+      </div>
+    );
+  }
+
   // Deterministic hash based on name and role
   const hashCode = (str: string) => {
     let hash = 0;

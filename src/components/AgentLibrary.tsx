@@ -146,7 +146,7 @@ export default function AgentLibrary({ library, onClose, onForge, onDelete, getA
             <div className="space-y-2.5">
               {library.map((agent) => (
                 <div key={agent.id} className="flex items-start gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-xl p-3 transition-colors">
-                  <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="sm" />
+                  <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="sm" portraitUrl={agent.portraitUrl} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-baseline gap-2 flex-wrap">
                       <span className="text-xs font-bold font-display" style={{ color: getAgentColorHex(agent.colorTheme) }}>

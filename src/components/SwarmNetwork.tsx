@@ -246,7 +246,7 @@ export default function SwarmNetwork({ agents, agentProgress, sessionStatus, onS
 
               {/* Avatar */}
               <div className="absolute inset-0 flex items-center justify-center" style={{ opacity: isDim ? 0.5 : 1 }}>
-                <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="md" />
+                <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="md" portraitUrl={agent.portraitUrl} />
               </div>
 
               {/* Status badge */}

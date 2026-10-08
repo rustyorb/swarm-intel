@@ -391,7 +391,7 @@ export default function InterrogationRoom({ session, settings, onPersist, getAge
                 return (
                   <div key={m.id} className="flex gap-3">
                     {agent ? (
-                      <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="sm" />
+                      <PixelAvatar name={agent.name} role={agent.role} themeColor={agent.colorTheme} size="sm" portraitUrl={agent.portraitUrl} />
                     ) : (
                       <div className="w-8 h-8 rounded-xl bg-accent-warm/10 border border-accent-warm/30 flex items-center justify-center flex-shrink-0">
                         <Cpu className="w-4 h-4 text-accent-warm" />
