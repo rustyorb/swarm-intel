@@ -264,7 +264,11 @@ export default function LiveWire({
                 {stage === "reasoning" ? `Model reasoning ${clock(now - stageSince)}` : stage === "planning" ? "Planning search queries" : stage === "searching" ? `Searching · wave ${tele?.wave ?? 1}` : `Reading ${tele?.pages ?? 0} pages`}
               </div>
               <div className="text-[10px] font-mono text-text-muted">
-                {tele?.hits ? `${tele.hits} live results in hand` : "No tokens yet — nothing is stuck"}
+                {showingSynthesis
+                  ? `${agents.filter((a) => a.report).length} reports · ${agents.reduce((n, a) => n + ((a.report || "").match(/\S+/g) || []).length, 0).toLocaleString()} words in hand`
+                  : tele?.hits
+                  ? `${tele.hits} live results in hand`
+                  : "No tokens yet — nothing is stuck"}
                 {stage === "reasoning" ? " · the first token ends this" : ""}
               </div>
             </div>
