@@ -1058,6 +1058,25 @@ async function generateUnifiedJSON(
 // Appended to a report when the provider stopped at its output token limit,
 // so a cut-off document is never mistaken for a finished one.
 const TRUNCATION_MARKER = "\n\n> ⚠ OUTPUT TRUNCATED: the provider stopped at its output token limit. The report above is incomplete.";
+const DEGENERATE_MARKER = "\n\n> ⚠ OUTPUT ENDED EARLY: the model began emitting blank filler after this point and the stream was cut at the last real text.";
+
+// Some models (Gemini Flash via OpenRouter, observed 2026-10-08) finish a
+// report and then emit whitespace tokens until the provider's output limit:
+// a 12k-char report arrived as 1M chars. Once a whitespace run passes this
+// length the stream is cut and the report marked.
+const DEGENERATE_WS_RUN = 4000;
+// Whitespace-only chunks beyond this run length are not forwarded at all.
+const WS_FORWARD_LIMIT = 64;
+
+// Collapse filler whitespace in a report before it enters any prompt or
+// is persisted. Keeps markdown indentation (up to 8 spaces) and up to two
+// blank lines.
+function sanitizeReport(text: string): string {
+  return String(text ?? "")
+    .replace(/[^\S\n]{9,}/g, " ")
+    .replace(/\n(?:[^\S\n]*\n){3,}/g, "\n\n\n")
+    .trimEnd();
+}
 
 async function runUniversalStream(
   taskRole: "orchestrator" | "agent" | "synthesis",
@@ -1071,8 +1090,29 @@ async function runUniversalStream(
   // Opt-in two-wave iterative deepening. Only full agent investigations set
   // this; interrogation answers stay single-wave for responsiveness.
   deepenSearch?: boolean
-): Promise<{ truncated: boolean }> {
+): Promise<{ truncated: boolean; degenerate: boolean }> {
   let truncated = false;
+  let degenerate = false;
+  let stopRequested = false;
+  let wsRun = 0;
+  // Every provider loop emits through this guard instead of onChunk directly.
+  const emit = (text: string) => {
+    if (stopRequested || !text) return;
+    if (/^\s*$/.test(text)) {
+      wsRun += text.length;
+      if (wsRun >= DEGENERATE_WS_RUN) {
+        degenerate = true;
+        stopRequested = true;
+        return;
+      }
+      if (wsRun > WS_FORWARD_LIMIT) return;
+      onChunk(text);
+      return;
+    }
+    const trailing = text.match(/\s*$/);
+    wsRun = trailing ? trailing[0].length : 0;
+    onChunk(text);
+  };
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
   // Local SearXNG grounding is the workhorse for EVERY provider — native
@@ -1134,15 +1174,16 @@ ${noOwnSearch}
 
     for await (const chunk of responseStream) {
       if (chunk.text) {
-        onChunk(chunk.text);
+        emit(chunk.text);
       }
       const finish = chunk.candidates?.[0]?.finishReason as string | undefined;
       if (finish === "MAX_TOKENS") truncated = true;
       else if (finish === "SAFETY" || finish === "RECITATION" || finish === "PROHIBITED_CONTENT") {
         throw new Error(`Gemini stopped the stream: finishReason=${finish}.`);
       }
+      if (stopRequested) break;
     }
-    return { truncated };
+    return { truncated: truncated && !degenerate, degenerate };
   }
 
   if (provider === "anthropic") {
@@ -1188,7 +1229,7 @@ ${noOwnSearch}
           try {
             const parsed = JSON.parse(cleanLine.substring(6));
             if (parsed.type === "content_block_delta" && parsed.delta?.text) {
-              onChunk(parsed.delta.text);
+              emit(parsed.delta.text);
             } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") {
               truncated = true;
             } else if (parsed.type === "error") {
@@ -1199,9 +1240,11 @@ ${noOwnSearch}
             throw e;
           }
         }
+        if (stopRequested) break;
       }
+      if (stopRequested) break;
     }
-    return { truncated };
+    return { truncated: truncated && !degenerate, degenerate };
   }
 
   // OpenAI-compatible providers
@@ -1269,7 +1312,7 @@ ${noOwnSearch}
           }
           const text = parsed.choices?.[0]?.delta?.content || "";
           if (text) {
-            onChunk(text);
+            emit(text);
           }
           if (parsed.choices?.[0]?.finish_reason === "length") truncated = true;
         } catch (e: any) {
@@ -1277,9 +1320,11 @@ ${noOwnSearch}
           throw e;
         }
       }
+      if (stopRequested) break;
     }
+    if (stopRequested) break;
   }
-  return { truncated };
+  return { truncated: truncated && !degenerate, degenerate };
 }
 
 async function startServer() {
@@ -1957,7 +2002,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       }, 5000);
 
       try {
-        const { truncated } = await runUniversalStream(
+        const { truncated, degenerate } = await runUniversalStream(
           "agent",
           settings,
           prompt,
@@ -1975,7 +2020,10 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
         );
 
         clearInterval(pingInterval);
-        if (truncated) {
+        if (degenerate) {
+          console.warn(`[Degenerate] ${agent.name}: model emitted blank filler; stream cut at last real text.`);
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: DEGENERATE_MARKER })}\n\n`);
+        } else if (truncated) {
           console.warn(`[Truncation] ${agent.name}: provider hit its output token limit.`);
           res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
         }
@@ -1995,10 +2043,12 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, rawTopic, reports, settings, config, critiques, priorContext, catalyticTerms } = req.body;
-      if (!topic || !reports || !Array.isArray(reports)) {
+      const { topic, rawTopic, reports: rawReports, settings, config, critiques, priorContext, catalyticTerms } = req.body;
+      if (!topic || !rawReports || !Array.isArray(rawReports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
+      // Strip blank filler before anything reads or persists the reports.
+      const reports: any[] = rawReports.map((r: any) => (r && typeof r.report === "string" ? { ...r, report: sanitizeReport(r.report) } : r));
       const priorBlock = formatPriorContextBlock(priorContext);
       // Short title for the run directory and metadata: the user's original
       // input when the Directive Conditioner expanded it, else the topic.
@@ -2162,7 +2212,7 @@ ${fringe
 
       try {
         let synthesizedReport = "";
-        const { truncated } = await runUniversalStream(
+        const { truncated, degenerate } = await runUniversalStream(
           "synthesis",
           settings,
           prompt,
@@ -2175,7 +2225,11 @@ ${fringe
         );
 
         clearInterval(pingInterval);
-        if (truncated) {
+        if (degenerate) {
+          console.warn("[Degenerate] synthesis: model emitted blank filler; stream cut at last real text.");
+          synthesizedReport = sanitizeReport(synthesizedReport) + DEGENERATE_MARKER;
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: DEGENERATE_MARKER })}\n\n`);
+        } else if (truncated) {
           console.warn("[Truncation] synthesis: provider hit its output token limit.");
           synthesizedReport += TRUNCATION_MARKER;
           res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
@@ -2246,7 +2300,7 @@ ${fringe
 
       const reportsBlock = reports
         .filter((r: any) => r && r.report)
-        .map((r: any) => `### ${r.agentName || "Specialist"} (${r.agentRole || "Investigator"})\n${String(r.report).slice(0, 9000)}`)
+        .map((r: any) => `### ${r.agentName || "Specialist"} (${r.agentRole || "Investigator"})\n${sanitizeReport(String(r.report)).slice(0, 9000)}`)
         .join("\n\n");
       const anglesBlock = (Array.isArray(angles) ? angles : [])
         .map((a: any) => `- ${String(a).slice(0, 300)}`)
@@ -2379,7 +2433,8 @@ Return 3-12 leads total.`;
   // 3.5. Red Team Endpoint - VEX adversarially cross-examines a single specialist report via SSE
   app.post("/api/research/redteam-stream", async (req, res) => {
     try {
-      const { topic, agent, report, settings, config } = req.body;
+      const { topic, agent, report: rawReport, settings, config } = req.body;
+      const report = typeof rawReport === "string" ? sanitizeReport(rawReport) : rawReport;
       if (!topic || !agent || !report) {
         return res.status(400).json({ error: "Topic, agent, and report are required for a red team review." });
       }
@@ -2495,7 +2550,7 @@ Keep the whole cross-examination tight and high-signal: roughly 400-700 words. W
       // of chars, and the whole set must fit one orchestrator context. Slice
       // rather than reject so extraction always runs.
       const reportsBlock = usableReports
-        .map((r: any) => `--- REPORT BY ${r.agentName || r.agentId} (agent id: "${r.agentId}", role: ${r.agentRole || "specialist"}) ---\n${r.report.slice(0, 8000)}`)
+        .map((r: any) => `--- REPORT BY ${r.agentName || r.agentId} (agent id: "${r.agentId}", role: ${r.agentRole || "specialist"}) ---\n${sanitizeReport(r.report).slice(0, 8000)}`)
         .join("\n\n");
       const synthesisBlock = typeof synthesizedReport === "string" && synthesizedReport.trim()
         ? `\n\nSYNTHESIZED REPORT (cross-specialist blend — use it to spot agreement and conflict):\n${synthesizedReport.slice(0, 10000)}`
@@ -2612,7 +2667,7 @@ Every claim needs at least one supporter or disputer. Cover the breadth of the r
         intelligence += `## CONSOLIDATED SYNTHESIS\n${synthesizedReport || "(no synthesis available)"}\n\n`;
         intelligence += agents
           .filter((a: any) => a && a.report)
-          .map((a: any) => `## SPECIALIST REPORT — ${a.name} (${a.role})\nInvestigative angle: ${a.investigativeAngle || "n/a"}\n\n${a.report}`)
+          .map((a: any) => `## SPECIALIST REPORT — ${a.name} (${a.role})\nInvestigative angle: ${a.investigativeAngle || "n/a"}\n\n${sanitizeReport(String(a.report))}`)
           .join("\n\n---\n\n");
       } else {
         intelligence += `## CONSOLIDATED SYNTHESIS (shared context)\n${(synthesizedReport || "(no synthesis available)").slice(0, 8000)}\n\n`;
@@ -2753,7 +2808,7 @@ CONTESTED QUESTION ON THE FLOOR: "${question}"
 You are debating: ${opponentList}. The moderator (the user) may interject — address moderator points directly when they appear.
 
 YOUR OWN FULL REPORT (your authoritative evidence base):
-${String(speaker.report || "(no report on file)").slice(0, 14000)}
+${sanitizeReport(String(speaker.report || "(no report on file)")).slice(0, 14000)}
 
 CONSOLIDATED SYNTHESIS (shared context):
 ${String(synthesizedReport || "(none)").slice(0, 8000)}

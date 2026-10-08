@@ -67,6 +67,15 @@ import { Agent, AgentStatus, AtlasClaim, Lead, PriorContext, RedTeamCritique, Re
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
 const CONDITIONER_HEX = "#f59e0b";
+
+// Collapse blank filler some models emit after a report (Gemini Flash via
+// OpenRouter was observed streaming a million spaces after 12k chars of
+// text). Mirrors the server's sanitizeReport so stored sessions stay small.
+const sanitizeReportText = (text: string): string =>
+  String(text ?? "")
+    .replace(/[^\S\n]{9,}/g, " ")
+    .replace(/\n(?:[^\S\n]*\n){3,}/g, "\n\n\n")
+    .trimEnd();
 const ROSTER_HEX = "#3b82f6";
 
 // Starter roster seeded into the Agent Library on first run only (when the
@@ -1478,15 +1487,16 @@ export default function App() {
 
         addLog(agent.name, "Critical data compiled. Report submitted to the central queue.", "success", agent.colorTheme);
 
+        const cleanReport = sanitizeReportText(report);
         setSession(prev => {
           if (!prev) return null;
           return {
             ...prev,
-            agents: prev.agents.map(a => a.id === agent.id ? { ...a, status: "completed" as AgentStatus, report } : a)
+            agents: prev.agents.map(a => a.id === agent.id ? { ...a, status: "completed" as AgentStatus, report: cleanReport } : a)
           };
         });
 
-        results.push({ agentId: agent.id, report: report, name: agent.name, role: agent.role });
+        results.push({ agentId: agent.id, report: cleanReport, name: agent.name, role: agent.role });
       } catch (err: any) {
         clearInterval(intervalId);
         setAgentProgress(prev => ({
