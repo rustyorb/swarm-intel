@@ -910,6 +910,10 @@ async function generateUnifiedJSON(
   return extractJSON(responseText);
 }
 
+// Appended to a report when the provider stopped at its output token limit,
+// so a cut-off document is never mistaken for a finished one.
+const TRUNCATION_MARKER = "\n\n> ⚠ OUTPUT TRUNCATED: the provider stopped at its output token limit. The report above is incomplete.";
+
 async function runUniversalStream(
   taskRole: "orchestrator" | "agent" | "synthesis",
   settings: any,
@@ -922,7 +926,8 @@ async function runUniversalStream(
   // Opt-in two-wave iterative deepening. Only full agent investigations set
   // this; interrogation answers stay single-wave for responsiveness.
   deepenSearch?: boolean
-): Promise<void> {
+): Promise<{ truncated: boolean }> {
+  let truncated = false;
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
   // Local SearXNG grounding is the workhorse for EVERY provider — native
@@ -986,8 +991,13 @@ ${noOwnSearch}
       if (chunk.text) {
         onChunk(chunk.text);
       }
+      const finish = chunk.candidates?.[0]?.finishReason as string | undefined;
+      if (finish === "MAX_TOKENS") truncated = true;
+      else if (finish === "SAFETY" || finish === "RECITATION" || finish === "PROHIBITED_CONTENT") {
+        throw new Error(`Gemini stopped the stream: finishReason=${finish}.`);
+      }
     }
-    return;
+    return { truncated };
   }
 
   if (provider === "anthropic") {
@@ -1034,14 +1044,19 @@ ${noOwnSearch}
             const parsed = JSON.parse(cleanLine.substring(6));
             if (parsed.type === "content_block_delta" && parsed.delta?.text) {
               onChunk(parsed.delta.text);
+            } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") {
+              truncated = true;
+            } else if (parsed.type === "error") {
+              throw new Error(`Anthropic stream error: ${parsed.error?.message || JSON.stringify(parsed.error || parsed)}`);
             }
-          } catch (e) {
-            // Ignore partial chunk parsing errors
+          } catch (e: any) {
+            if (e instanceof SyntaxError) continue; // partial chunk
+            throw e;
           }
         }
       }
     }
-    return;
+    return { truncated };
   }
 
   // OpenAI-compatible providers
@@ -1104,16 +1119,22 @@ ${noOwnSearch}
       if (cleanLine.startsWith("data: ")) {
         try {
           const parsed = JSON.parse(cleanLine.substring(6));
+          if (parsed.error) {
+            throw new Error(`${provider.toUpperCase()} stream error: ${parsed.error.message || JSON.stringify(parsed.error)}`);
+          }
           const text = parsed.choices?.[0]?.delta?.content || "";
           if (text) {
             onChunk(text);
           }
-        } catch (e) {
-          // Ignore partial chunk JSON parses
+          if (parsed.choices?.[0]?.finish_reason === "length") truncated = true;
+        } catch (e: any) {
+          if (e instanceof SyntaxError) continue; // partial chunk
+          throw e;
         }
       }
     }
   }
+  return { truncated };
 }
 
 async function startServer() {
@@ -1767,7 +1788,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       }, 5000);
 
       try {
-        await runUniversalStream(
+        const { truncated } = await runUniversalStream(
           "agent",
           settings,
           prompt,
@@ -1785,6 +1806,10 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
         );
 
         clearInterval(pingInterval);
+        if (truncated) {
+          console.warn(`[Truncation] ${agent.name}: provider hit its output token limit.`);
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
+        }
         res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
         res.end();
       } catch (error: any) {
@@ -1962,7 +1987,7 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
 
       try {
         let synthesizedReport = "";
-        await runUniversalStream(
+        const { truncated } = await runUniversalStream(
           "synthesis",
           settings,
           prompt,
@@ -1975,6 +2000,11 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
         );
 
         clearInterval(pingInterval);
+        if (truncated) {
+          console.warn("[Truncation] synthesis: provider hit its output token limit.");
+          synthesizedReport += TRUNCATION_MARKER;
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
+        }
         console.log(`Synthesis generation complete. Response text length: ${synthesizedReport.length}`);
         persistRunFile(runDir, "synthesis.md", synthesizedReport);
         persistRunFile(runDir, "meta.json", JSON.stringify({ topic, completedAt: new Date().toISOString(), chars: synthesizedReport.length, depth, fringe, delta }, null, 2));
