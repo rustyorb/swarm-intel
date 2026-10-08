@@ -212,14 +212,20 @@ function envKeyFor(provider: string): string {
   return envKeys[provider] || "";
 }
 
-function getModelAndKey(taskRole: "orchestrator" | "agent" | "synthesis", settings: any) {
+// The three pipeline roles plus "forge": the model that writes reusable
+// personas for the Agent Library. Forge falls back to the orchestrator
+// mapping when the client has not set one.
+type TaskRole = "orchestrator" | "agent" | "synthesis" | "forge";
+
+function getModelAndKey(taskRole: TaskRole, settings: any) {
   let provider = "gemini";
   let model = "gemini-3.5-flash";
   let apiKey = "";
   let baseUrl = "";
 
-  if (settings && settings.modelMapping && settings.modelMapping[taskRole]) {
-    const mapping = settings.modelMapping[taskRole];
+  const mappingKey: TaskRole = taskRole === "forge" && !(settings?.modelMapping?.forge?.model) ? "orchestrator" : taskRole;
+  if (settings && settings.modelMapping && settings.modelMapping[mappingKey]) {
+    const mapping = settings.modelMapping[mappingKey];
     provider = mapping.provider || "gemini";
     model = mapping.model || "gemini-3.5-flash";
 
@@ -1001,7 +1007,7 @@ Generate 4-6 concrete web search queries for this investigation. Rules:
 }
 
 async function generateUnifiedJSON(
-  taskRole: "orchestrator" | "agent" | "synthesis",
+  taskRole: TaskRole,
   settings: any,
   prompt: string,
   systemInstruction: string,
@@ -1100,7 +1106,7 @@ function sanitizeReport(text: string): string {
 }
 
 async function runUniversalStream(
-  taskRole: "orchestrator" | "agent" | "synthesis",
+  taskRole: TaskRole,
   settings: any,
   prompt: string,
   systemInstruction: string,
@@ -2377,6 +2383,71 @@ The person is invented: do not depict any real or famous individual.`;
     } catch (error: any) {
       console.warn(`[Portrait] failed: ${error?.message || error}`);
       res.json({ url: null, error: error?.message || "Portrait generation failed." });
+    }
+  });
+
+  // 3.2c. Agent Forge — write (or rewrite) a reusable Library persona from
+  // whatever the user typed: a rough description, a bare name, a role, or
+  // all three. Uses the "forge" model role (falls back to the orchestrator).
+  app.post("/api/research/forge-agent", async (req, res) => {
+    try {
+      const { name, role, seed, settings, fringe, library } = req.body || {};
+      const seedText = String(seed || "").trim();
+      const givenName = String(name || "").trim();
+      const givenRole = String(role || "").trim();
+      if (!seedText && !givenName && !givenRole) {
+        return res.status(400).json({ error: "Give the forge something: a description, a name, or a role." });
+      }
+      const existing = Array.isArray(library)
+        ? library.filter((a: any) => a && a.name && a.role).slice(0, 40).map((a: any) => `- ${a.name} — ${a.role}`).join("\n")
+        : "";
+      const prompt = `You are writing a REUSABLE SPECIALIST PERSONA for a multi-agent research swarm's Agent Library. In Roster Mode the orchestrator reads each persona's STANDING SPECIALTY and tailors a per-mission assignment from it, so the specialty must say what this agent is FOR across many topics — what it hunts, where it looks, what it flags — not a single mission.
+
+HOUSE STYLE for the standing specialty (match it): one tight paragraph of 35-70 words, imperative or declarative, concrete nouns, no fluff. Examples from the library:
+- "Hunts hard numbers: datasets, market figures, measurement records, statistical anomalies. Quantifies what others describe, flags where the data is too thin to carry the claims built on it."
+- "Follows the money: grants, investors, procurement records, nonprofit filings, and conflicts of interest. Maps who benefits from a claim being believed or buried."
+- "Reads patents, technical standards, regulatory filings, and engineering documents — what was actually claimed, what was actually built, and where filings contradict public narratives."
+
+INPUT FROM THE USER:
+${givenName ? `Persona name (keep it): "${givenName}"\n` : ""}${givenRole ? `Specialty title (refine only if clearly improvable): "${givenRole}"\n` : ""}${seedText ? `Description / notes (any form — a sentence, keywords, a paragraph, even a full draft to polish):\n"""\n${seedText.slice(0, 3000)}\n"""` : "(no description given — derive the specialty from the name/role)"}
+${fringe ? "\nMODE: fringe/case-file research — personas should be investigation-native (archives, FOIA, practitioner communities, provenance), never a 'debunker'." : ""}
+${existing ? `\nALREADY IN THE LIBRARY (do not duplicate a role; carve a distinct niche):\n${existing}` : ""}
+
+Return JSON with:
+- "name": a short, memorable persona name (one or two words, e.g. "Kestrel", "Mox", "Dr. Ilse Varga"); keep the user's name if given.
+- "role": a specialty title a real expert would hold, 2-6 words, Title Case (e.g. "Patent & Technical Filings Examiner").
+- "investigativeAngle": the standing specialty in house style, 35-70 words.
+- "colorTheme": one of cyan, emerald, rose, amber, purple, indigo, blue, fuchsia — pick what fits the persona.`;
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          name: { type: Type.STRING },
+          role: { type: Type.STRING },
+          investigativeAngle: { type: Type.STRING },
+          colorTheme: { type: Type.STRING },
+        },
+        required: ["name", "role", "investigativeAngle", "colorTheme"],
+      };
+      const result = await generateUnifiedJSON(
+        "forge",
+        settings,
+        prompt,
+        "You are the Agent Forge for an investigative research swarm. You write crisp, reusable specialist personas whose standing specialty tells an orchestrator exactly what to hand them on any topic.",
+        responseSchema
+      );
+      const colors = ["cyan", "emerald", "rose", "amber", "purple", "indigo", "blue", "fuchsia"];
+      const out = {
+        name: String(result?.name || givenName || "").trim().slice(0, 60),
+        role: String(result?.role || givenRole || "").trim().slice(0, 80),
+        investigativeAngle: String(result?.investigativeAngle || "").trim().slice(0, 900),
+        colorTheme: colors.includes(String(result?.colorTheme)) ? String(result.colorTheme) : "cyan",
+      };
+      if (!out.investigativeAngle) return res.status(502).json({ error: "The forge model returned no specialty text. Try another model in Settings → Agent Forge." });
+      console.log(`[Forge] ${out.name} — ${out.role}`);
+      res.json({ agent: out });
+    } catch (error: any) {
+      console.error("Error in /api/research/forge-agent:", error);
+      res.status(500).json({ error: error?.message || "Agent forge failed." });
     }
   });
 

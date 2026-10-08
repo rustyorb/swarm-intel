@@ -573,6 +573,8 @@ const DEFAULT_SETTINGS = {
     orchestrator: { provider: "gemini", model: "gemini-3.5-flash" },
     agent: { provider: "gemini", model: "gemini-3.5-flash" },
     synthesis: { provider: "gemini", model: "gemini-3.5-flash" },
+    // Agent Forge: writes reusable personas for the Agent Library.
+    forge: { provider: "gemini", model: "gemini-3.5-flash" },
   }
 };
 
@@ -672,7 +674,12 @@ export default function App() {
         const parsed = JSON.parse(stored);
         // Migrate old Gemini models to gemini-3.5-flash if they are mapped
         if (parsed.modelMapping) {
-          const roles: ("orchestrator" | "agent" | "synthesis")[] = ["orchestrator", "agent", "synthesis"];
+          // Settings saved before the Agent Forge role existed: seed it from
+          // the orchestrator mapping so the selector always has a value.
+          if (!parsed.modelMapping.forge && parsed.modelMapping.orchestrator) {
+            parsed.modelMapping.forge = { ...parsed.modelMapping.orchestrator };
+          }
+          const roles: ("orchestrator" | "agent" | "synthesis" | "forge")[] = ["orchestrator", "agent", "synthesis", "forge"];
           roles.forEach(role => {
             if (parsed.modelMapping[role] && parsed.modelMapping[role].provider === "gemini") {
               const model = parsed.modelMapping[role].model;
@@ -3672,7 +3679,44 @@ export default function App() {
           library={agentLibrary}
           onClose={() => setShowAgentLibrary(false)}
           onForge={(agent) => saveAgentToLibrary(agent)}
+          onUpdate={(id, patch) => {
+            setAgentLibrary(prev => prev.map(s => s.id === id ? { ...s, ...patch } : s));
+            addLog("SYSTEM", `Library persona updated: ${patch.name || "(unchanged name)"}.`, "success");
+          }}
           onDelete={(id) => setAgentLibrary(prev => prev.filter(s => s.id !== id))}
+          onGenerate={async (seed) => {
+            const r = await fetch("/api/research/forge-agent", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                ...seed,
+                settings,
+                fringe: !!swarmConfig.fringeMode,
+                library: agentLibrary.map(a => ({ name: a.name, role: a.role })),
+              }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok || !data?.agent) throw new Error(data?.error || "Agent forge failed.");
+            addLog("SYSTEM", `FORGE: wrote ${data.agent.name} — ${data.agent.role}.`, "success");
+            return data.agent;
+          }}
+          onPortrait={async (saved) => {
+            const r = await fetch("/api/research/agent-portrait", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name: saved.name,
+                role: saved.role,
+                investigativeAngle: saved.investigativeAngle,
+                colorTheme: saved.colorTheme,
+                fringe: !!swarmConfig.fringeMode,
+                settings: { providers: { gemini: { apiKey: (settings as any)?.providers?.gemini?.apiKey || "" } } },
+              }),
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!data?.url) throw new Error(data?.error || "Portrait generation failed.");
+            setAgentLibrary(prev => prev.map(s => s.id === saved.id ? { ...s, portraitUrl: data.url } : s));
+          }}
           getAgentColorHex={getAgentColorHex}
         />
       )}
@@ -4207,11 +4251,12 @@ export default function App() {
                     </div>
 
                     <div className="space-y-5">
-                      {["orchestrator", "agent", "synthesis"].map((role) => {
-                        const mapping = settings.modelMapping[role as keyof typeof settings.modelMapping];
-                        const displayName = role === "orchestrator" ? "Lead Orchestrator (Assembles agents)" :
+                      {["orchestrator", "agent", "synthesis", "forge"].map((role) => {
+                        const mapping = settings.modelMapping[role as keyof typeof settings.modelMapping] || settings.modelMapping.orchestrator;
+                        const displayName = role === "orchestrator" ? "Lead Orchestrator (Assembles agents, conditions directives)" :
                                             role === "agent" ? "Specialist Investigators (Conduct parallel research)" :
-                                            "Compiler Synthesizer (Merges final report)";
+                                            role === "synthesis" ? "Compiler Synthesizer (Merges final report)" :
+                                            "Agent Forge (Writes personas for the Agent Library)";
                         
                         // Get available models for selected provider
                         const selectedProvider = mapping.provider;
