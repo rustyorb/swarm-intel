@@ -16,7 +16,10 @@ export default defineConfig(() => {
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // When watching is on, never let a server-side or data-file change force a
+      // full client reload: server.ts does not hot-reload anyway, and a reload
+      // mid-run kills the browser-driven agent loop.
+      watch: process.env.DISABLE_HMR === 'true' ? null : { ignored: ['**/server.ts', '**/runs/**', '**/docs/**', '**/*.md'] },
     },
   };
 });

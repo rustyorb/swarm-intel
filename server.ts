@@ -501,7 +501,7 @@ async function gatherLiveContext(
 ): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
-  const engines: { name: string; enabled: boolean; jobsFor: (qs: string[]) => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
+  const engines: { name: string; enabled: boolean; sequentialDelayMs?: number; jobsFor: (qs: string[]) => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
     {
       name: "SearXNG",
       enabled: true,
@@ -511,8 +511,11 @@ async function gatherLiveContext(
       ]),
     },
     {
+      // Brave's free tier allows one request per second; firing a wave in
+      // parallel returns 429 for everything after the first.
       name: "Brave",
       enabled: !!BRAVE_SEARCH_API_KEY,
+      sequentialDelayMs: 1100,
       jobsFor: (qs) => qs.map((q) => ({ query: q, run: () => braveSearch(q) })),
     },
     {
@@ -527,16 +530,30 @@ async function gatherLiveContext(
     const seen = new Set<string>();
     const hits: SearchHit[] = [];
     const perQuery = new Map<string, number>();
+    // Queries for which at least one job actually completed. A query that
+    // only failed (engine down, rate-limited) must be reported to the model
+    // as NOT RUN — never as "0 results", which reads as evidence of absence.
+    const succeeded = new Set<string>();
 
     const runWave = async (waveQueries: string[]) => {
       const jobs = engine.jobsFor(waveQueries);
-      const settled = await Promise.allSettled(jobs.map((j) => j.run()));
+      let settled: PromiseSettledResult<SearchHit[]>[];
+      if (engine.sequentialDelayMs) {
+        settled = [];
+        for (let i = 0; i < jobs.length; i++) {
+          if (i > 0) await new Promise((r) => setTimeout(r, engine.sequentialDelayMs));
+          settled.push(...(await Promise.allSettled([jobs[i].run()])));
+        }
+      } else {
+        settled = await Promise.allSettled(jobs.map((j) => j.run()));
+      }
       settled.forEach((result, idx) => {
         const job = jobs[idx];
         if (result.status !== "fulfilled") {
           console.warn(`[Grounding] ${engine.name} query failed ("${job.query.slice(0, 60)}"): ${result.reason?.message || result.reason}`);
           return;
         }
+        succeeded.add(job.query);
         perQuery.set(job.query, (perQuery.get(job.query) || 0) + result.value.length);
         for (const hit of result.value) {
           if (!hit.url || seen.has(hit.url)) continue;
@@ -578,7 +595,9 @@ async function gatherLiveContext(
       const ranked = rankHits(hits, allQueries).slice(0, 40);
       const today = new Date().toISOString().slice(0, 10);
       const queryLines = allQueries
-        .map((q, i) => `- [wave ${i < uniqueQueries.length ? 1 : 2}] "${q}" (${perQuery.get(q) || 0} raw hits)`)
+        .map((q, i) => succeeded.has(q)
+          ? `- [wave ${i < uniqueQueries.length ? 1 : 2}] "${q}" (${perQuery.get(q) || 0} raw hits)`
+          : `- [wave ${i < uniqueQueries.length ? 1 : 2}] "${q}" — SEARCH FAILED (engine error): this query did NOT run. Treat it as unsearched; it is NOT evidence that nothing exists.`)
         .join("\n");
       const lines = ranked.map(
         (h, i) => `[${i + 1}] ${h.title}${h.publishedDate ? ` (published ${h.publishedDate})` : ""}\n    URL: ${h.url}\n    ${h.snippet}`
@@ -1793,10 +1812,13 @@ Ensure the new agent is distinct and does not replicate the other existing agent
   // 2. Agent Research Run Endpoint - Executes a single agent investigation via SSE
   app.post("/api/research/agent-run-stream", async (req, res) => {
     try {
-      const { topic, agent, settings, config, priorContext } = req.body;
+      const { topic, rawTopic, agent, settings, config, priorContext } = req.body;
       if (!topic || !agent) {
         return res.status(400).json({ error: "Topic and agent configuration are required." });
       }
+      // Baseline search strings come from the user's short topic, never from
+      // a conditioned directive whose first 160 chars are a title line.
+      const queryTopic: string = typeof rawTopic === "string" && rawTopic.trim() ? rawTopic.trim() : String(topic);
 
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
@@ -1895,17 +1917,17 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       // Fringe mode biases the sweep toward archives, declassified records,
       // and practitioner communities alongside a mainstream baseline query.
       const currentYear = new Date().getFullYear();
-      const shortTopic = String(topic).slice(0, 160);
+      const shortTopic = queryTopic.slice(0, 160);
       const naiveQueries = fringe
         ? [
-            String(topic).slice(0, 220),
+            queryTopic.slice(0, 220),
             String(agent.investigativeAngle || "").slice(0, 220),
             `${shortTopic} site:archive.org`,
             `${shortTopic} declassified FOIA documents`,
             `${shortTopic} forum discussion firsthand account`,
           ].filter((q) => q.trim().length > 0)
         : [
-            String(topic).slice(0, 220),
+            queryTopic.slice(0, 220),
             String(agent.investigativeAngle || "").slice(0, 220),
             `${shortTopic} latest ${currentYear}`,
           ].filter((q) => q.trim().length > 0);
@@ -1916,7 +1938,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings);
       // Exact-phrase and de-glued variants of the topic ride along regardless
       // of planner quality — a niche identifier must always get a direct hunt.
-      const topicVariants = buildQueryVariants(String(topic));
+      const topicVariants = buildQueryVariants(queryTopic);
       const searchQueries = planned.length >= 2
         ? [...planned, ...topicVariants]
         : [...naiveQueries, ...topicVariants];

@@ -1369,6 +1369,7 @@ export default function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             topic: currentSession.topic,
+            rawTopic: currentSession.rawTopic,
             agent,
             // Per-agent model override rides in via the settings mapping, so
             // the server needs no special handling.
