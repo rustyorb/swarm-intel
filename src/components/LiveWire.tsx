@@ -121,7 +121,7 @@ export default function LiveWire({
 
   return (
     <div
-      className="mb-6 rounded-2xl border bg-bg-surface overflow-hidden relative"
+      className="mb-6 rounded-2xl border bg-bg-surface overflow-hidden relative flex-shrink-0"
       style={{ borderColor: `${hex}55` }}
       id="live-wire"
     >

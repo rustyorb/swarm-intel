@@ -1683,7 +1683,12 @@ export default function App() {
                     return {
                       ...prev,
                       agents: prev.agents.map(a => a.id === agent.id
-                        ? { ...a, grounding: { mode: data.mode, detail: String(data.detail || "") } }
+                        // Two grounding events arrive (injected block, then the
+                        // provider's native tool). Keep "injected" as the mode if
+                        // either was injected and append the native note.
+                        ? { ...a, grounding: a.grounding && a.grounding.mode === "injected" && data.mode === "native"
+                            ? { mode: "injected", detail: `${a.grounding.detail} · + ${String(data.detail || "")}` }
+                            : { mode: data.mode, detail: String(data.detail || "") } }
                         : a)
                     };
                   });
