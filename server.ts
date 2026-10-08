@@ -517,7 +517,7 @@ async function gatherLiveContext(
   // not inject mainstream press on every wave while the prompt asks for
   // archives and practitioner lanes. Search mix is code, not a sentence.
   newsLane: boolean = true
-): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number }> {
+): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number; urls: string[]; extractedUrls: string[]; queries: string[] }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
   const engines: { name: string; enabled: boolean; sequentialDelayMs?: number; jobsFor: (qs: string[]) => { query: string; run: () => Promise<SearchHit[]> }[] }[] = [
@@ -632,8 +632,10 @@ async function gatherLiveContext(
       onStage?.({ stage: "reading", pages: toFetch.length, hits: ranked.length });
       const extractResults = await Promise.allSettled(toFetch.map((h) => fetchPageExtract(h.url)));
       const extracts: string[] = [];
+      const extractedUrls: string[] = [];
       extractResults.forEach((result, idx) => {
         if (result.status === "fulfilled" && result.value) {
+          extractedUrls.push(toFetch[idx].url);
           extracts.push(`=== FULL TEXT of [${idx + 1}] ${toFetch[idx].title}\n    URL: ${toFetch[idx].url}\n${result.value}`);
         }
       });
@@ -649,12 +651,17 @@ ${queryLines}
 
 Results (deduplicated, relevance-ranked):
 ${lines.join("\n")}${extractsSection}`;
-      return { block, hitCount: ranked.length, engine: engine.name, pages: extracts.length, waves };
+      return { block, hitCount: ranked.length, engine: engine.name, pages: extracts.length, waves, urls: ranked.map((h) => h.url), extractedUrls, queries: allQueries };
     }
     console.warn(`[Grounding] ${engine.name} returned no hits${engine.name === "SearXNG" ? ` (${SEARXNG_BASE_URL})` : ""} — trying next engine.`);
   }
-  return { block: "", hitCount: 0, engine: "none", pages: 0, waves: 0 };
+  return { block: "", hitCount: 0, engine: "none", pages: 0, waves: 0, urls: [], extractedUrls: [], queries: [] };
 }
+
+// Normalize a URL for "already in hand" comparisons between the injected
+// SearXNG set and what a provider's native search tool brings back.
+const normUrl = (u: string): string =>
+  String(u || "").trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
 
 // Iterative deepening (k-deep-research "progressive refinement"): wave 2's
 // queries are written FROM wave 1's actual results — chasing the specific
@@ -1210,6 +1217,37 @@ async function runUniversalStream(
   };
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
+  // What the injected (SearXNG) pass put in the agent's hands, so a native
+  // search tool can be leashed to the holes and audited afterwards.
+  let injectedUrls: string[] = [];
+  let injectedExtracted: string[] = [];
+  let injectedQueries: string[] = [];
+  const nativeUrls: string[] = [];
+  // Audit means drop: a URL already in the injected set is not a finding.
+  // If the native pass has nothing new, the gap pass came back empty and it
+  // is reported that way — never merged in and called deep.
+  const auditNativePass = (label: string) => {
+    if (!hasSearch) return;
+    const have = new Set(injectedUrls.map(normUrl));
+    const seen = new Set<string>();
+    const fresh: string[] = [];
+    let dropped = 0;
+    for (const u of nativeUrls) {
+      const n = normUrl(u);
+      if (!n || seen.has(n)) continue;
+      seen.add(n);
+      if (have.has(n)) dropped++;
+      else fresh.push(u);
+    }
+    if (nativeUrls.length === 0) {
+      onGrounding?.({ mode: "native", detail: `${label}: gap pass ran no searches` });
+    } else if (fresh.length === 0) {
+      onGrounding?.({ mode: "native", detail: `${label}: gap pass came back EMPTY — ${dropped} result(s) already in hand were dropped; no new grounding from the native tool` });
+    } else {
+      onGrounding?.({ mode: "native", detail: `${label}: gap pass found ${fresh.length} new artifact(s) (${dropped} duplicate(s) dropped) — ${fresh.slice(0, 4).join(" | ")}` });
+    }
+  };
+
   // Local SearXNG grounding is the workhorse for EVERY provider — native
   // search tools (Gemini/Anthropic/plugins) ride on top as a bonus, but the
   // injected block guarantees each agent real, ranked, full-text sources.
@@ -1223,7 +1261,10 @@ async function runUniversalStream(
         : undefined;
       const newsLane = streamOpts?.evidencePolicy !== "fringe-first";
       console.log(`[Grounding] evidence policy ${streamOpts?.evidencePolicy || "mainstream-first"} — news lane ${newsLane ? "ON" : "OFF"}`);
-      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner, onStage, newsLane);
+      const { block, hitCount, engine, pages, waves, urls, extractedUrls, queries: ranQueries } = await gatherLiveContext(queries, refiner, onStage, newsLane);
+      injectedUrls = urls;
+      injectedExtracted = extractedUrls;
+      injectedQueries = ranQueries;
       if (hitCount > 0) {
         const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
           ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
@@ -1251,11 +1292,25 @@ ${noOwnSearch}
   // Providers with genuinely agentic native search also run their own real
   // queries on top of the injected block — hold them to the same honesty bar.
   if (hasSearch && AGENTIC_SEARCH_PROVIDERS.has(provider)) {
-    prompt = `${prompt}\n\nSEARCH HONESTY (mandatory): Run real queries with your web search tool and cite the actual results. Never describe a search you did not actually execute this run, and never report a null for a query you did not run — if a real query returned nothing, quote that exact query. Result dates may differ from your stated date by up to a day due to timezones; that is normal, not an anomaly.`;
+    if (injectedUrls.length > 0) {
+      // Leash, not kill: the native tool hunts the holes, never the homework.
+      const extractedSet = new Set(injectedExtracted.map(normUrl));
+      const notOpened = injectedUrls.filter((u) => !extractedSet.has(normUrl(u)));
+      prompt = `${prompt}\n\nNATIVE SEARCH GAP ORDER (mandatory — your web search tool is on a leash):
+The research system already ran ${injectedQueries.length} queries (listed in the LIVE WEB SEARCH RESULTS block) and holds ${injectedUrls.length} result URLs; ${injectedExtracted.length} of them were opened and their full text is in FULL SOURCE EXTRACTS. Everything in that block is ALREADY IN HAND. Deep means the second pass hunts the hole, not a paid encore of the first.
+Use your own search tool ONLY for the holes:
+  (a) a result in the block that was NOT opened — the pages nobody read. Those URLs are:${notOpened.length ? `\n${notOpened.slice(0, 14).map((u) => `     - ${u}`).join("\n")}` : " (every listed result was opened)"}
+  (b) a name, document, identifier or event that the results surfaced but no page resolves — the thing the second wave dug up and abandoned;
+  (c) the artifact classes the directive asks for that the block lacks: the original-era newspaper, the methods appendix, the filing or contract itself, the dataset.
+Rules: never re-run or paraphrase a listed query; never re-open a URL that was already extracted; a URL already in the block is NOT a finding of yours — cite the block entry instead. If your searches return only URLs already in the block, write exactly "Gap pass came back empty." and cite nothing from it as new grounding. Every native result you DO use is cited by its exact query and URL and marked [native pass]. Never describe a search you did not actually execute; if a real query returned nothing, quote that exact query. Result dates may differ from your stated date by up to a day due to timezones; that is normal, not an anomaly.`;
+    } else {
+      prompt = `${prompt}\n\nSEARCH HONESTY (mandatory): Run real queries with your web search tool and cite the actual results. Never describe a search you did not actually execute this run, and never report a null for a query you did not run — if a real query returned nothing, quote that exact query. Result dates may differ from your stated date by up to a day due to timezones; that is normal, not an anomaly.`;
+    }
   }
 
   if (provider === "gemini") {
-    if (hasSearch) onGrounding?.({ mode: "native", detail: "Gemini Google Search grounding active" });
+    // Native grounding is reported AFTER the stream, from an audit of what the
+    // tool actually returned against the injected set (see auditNativePass).
     const client = new GoogleGenAI({ apiKey });
     const responseStream = await client.models.generateContentStream({
       model: model,
@@ -1276,6 +1331,8 @@ ${noOwnSearch}
       if (chunk.text) {
         emit(chunk.text);
       }
+      const gChunks: any[] = (chunk.candidates?.[0] as any)?.groundingMetadata?.groundingChunks || [];
+      for (const gc of gChunks) if (gc?.web?.uri) nativeUrls.push(String(gc.web.uri));
       const finish = chunk.candidates?.[0]?.finishReason as string | undefined;
       if (finish === "MAX_TOKENS") truncated = true;
       else if (finish === "SAFETY" || finish === "RECITATION" || finish === "PROHIBITED_CONTENT") {
@@ -1283,11 +1340,13 @@ ${noOwnSearch}
       }
       if (stopRequested) break;
     }
+    auditNativePass("Gemini Google Search");
     return { truncated: truncated && !degenerate, degenerate };
   }
 
   if (provider === "anthropic") {
-    if (hasSearch) onGrounding?.({ mode: "native", detail: "Anthropic web_search server tool active" });
+    // Native grounding is reported AFTER the stream, from an audit of what the
+    // tool actually returned against the injected set (see auditNativePass).
     // Claude 5.x thinks by default (Opus can't turn it off) and thinking
     // tokens plus the web-search tool loop all count against max_tokens.
     // 16k left Haiku 5.5 forty visible words per report (2026-10-08). Give
@@ -1340,6 +1399,9 @@ ${noOwnSearch}
               emit(parsed.delta.text);
             } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") {
               truncated = true;
+            } else if (parsed.type === "content_block_start" && parsed.content_block?.type === "web_search_tool_result") {
+              const results = Array.isArray(parsed.content_block.content) ? parsed.content_block.content : [];
+              for (const r of results) if (r?.url) nativeUrls.push(String(r.url));
             } else if (parsed.type === "error") {
               throw new Error(`Anthropic stream error: ${parsed.error?.message || JSON.stringify(parsed.error || parsed)}`);
             }
@@ -1352,6 +1414,7 @@ ${noOwnSearch}
       }
       if (stopRequested) break;
     }
+    auditNativePass("Anthropic web_search");
     return { truncated: truncated && !degenerate, degenerate };
   }
 
