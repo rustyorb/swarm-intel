@@ -778,6 +778,9 @@ When agents should use live web search and when they should rely on the authorit
 What a passing synthesis looks like, in the requester's own terms: three to six bullet points that could be checked against the final document.
 
 RULES:
+- NO QUOTAS ON FINDINGS. Never set a numeric floor on what the research must find ("at least 10 individuals", "no fewer than 5 patents", "minimum 3 labs"). Quotas on evidence invite fabrication. Floors apply only to STRUCTURE: every deliverable present, every claim tagged, every gap registered as an open question. A deliverable's content line says what it must contain, never how many.
+- Use only the epistemic tags you defined in REQUIRED EPISTEMIC SEPARATION; do not introduce new ones elsewhere in the directive.
+- Write in English throughout.
 - IMPROVE, DO NOT REPLACE. If the request already contains any of these sections or their equivalents (a stated primary question, deliverables, constraints, failure modes, a success condition), carry that material into the matching section VERBATIM and fill only what is missing. A request that is already a full directive should come out nearly unchanged plus the sections it lacked.
 - Never research, never answer the question, never invent facts about the subject. Your knowledge of the domain may shape COVERAGE and KNOWN FAILURE MODES; it may not supply findings.
 - Never copy or summarize the request text into the directive except where the IMPROVE rule requires carrying a section forward.
@@ -2833,6 +2836,28 @@ THIS IS ROUND ${round} OF ${totalRounds}. Deliver your next debate turn:
     });
   };
   listenOn(freePort, 20);
+}
+
+// Never die silently. A long LLM call that rejects outside an awaited chain
+// would otherwise take the process down with nothing on the console.
+process.on("uncaughtException", (err: any) => {
+  console.error(`[FATAL] uncaughtException: ${err?.stack || err}`);
+});
+process.on("unhandledRejection", (reason: any) => {
+  console.error(`[FATAL] unhandledRejection: ${reason?.stack || reason}`);
+});
+process.on("exit", (code) => {
+  console.error(`[EXIT] process exiting with code ${code} at ${new Date().toISOString()}`);
+});
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as NodeJS.Signals[]) {
+  try {
+    process.on(sig, () => {
+      console.error(`[EXIT] received ${sig} at ${new Date().toISOString()}`);
+      process.exit(0);
+    });
+  } catch {
+    // Signal not supported on this platform.
+  }
 }
 
 startServer();
