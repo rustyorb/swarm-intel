@@ -1593,19 +1593,19 @@ export default function App() {
       addLog("ORCHESTRATOR", "Adversarial review complete. Handing critiques to synthesis...", "system");
     }
 
-    // Trigger synthesis
-    setSession(prev => {
-      if (!prev) return null;
-      return { ...prev, status: "synthesizing" as SessionStatus };
-    });
-    setTimeout(() => {
-      setSession(prev => {
-        if (prev) {
-          runSynthesis(prev, validReports, critiques);
-        }
-        return prev;
-      });
-    }, 0);
+    // Trigger synthesis. Never from inside a state updater: React Strict
+    // Mode (src/main.tsx) runs updaters twice in dev, which fired two
+    // syntheses per run. Read the latest session from the save-ref mirror
+    // and call once.
+    const latest = sessionSaveRef.current ?? currentSession;
+    const synthSession: ResearchSession = {
+      ...latest,
+      status: "synthesizing" as SessionStatus,
+      catalyticTerms,
+      critiques,
+    };
+    setSession(prev => prev ? { ...prev, status: "synthesizing" as SessionStatus } : null);
+    void runSynthesis(synthSession, validReports, critiques);
   };
 
   // Synthesis Call
