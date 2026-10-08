@@ -7,7 +7,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ResearchSession, Agent } from "../types";
+import { ResearchSession, Agent, sessionTitle } from "../types";
 
 const APP_VERSION = "v2.9.0";
 
@@ -235,7 +235,7 @@ function DossierBody({ session }: { session: ResearchSession }) {
       {/* COVER */}
       <header className="cover">
         <div className="eyebrow">SWARM_INTEL // MISSION DOSSIER</div>
-        <h1 className="cover-topic">{session.topic}</h1>
+        <h1 className="cover-topic">{sessionTitle(session)}</h1>
         <div className="meta-grid">
           <div className="meta-item">
             <span className="meta-k">Session ID</span>
@@ -392,7 +392,7 @@ export function buildDossierHtml(session: ResearchSession): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>SWARM_INTEL Dossier — ${escapeHtml(session.topic)}</title>
+<title>SWARM_INTEL Dossier — ${escapeHtml(sessionTitle(session))}</title>
 <style>${DOSSIER_CSS}</style>
 </head>
 <body>

@@ -30,7 +30,7 @@ Spec: `docs/superpowers/specs/2026-10-08-directive-conditioner-design.md`.
 - Consumes: `sessionSaveRef` (`useRef<ResearchSession | null>`, line 1012), `runSynthesis(currentSession, compiledReports, critiques)` (line 1612).
 - Produces: nothing new.
 
-- [ ] **Step 1: Replace the updater-side-effect with a direct call**
+- [x] **Step 1: Replace the updater-side-effect with a direct call**
 
 Replace lines 1601-1610:
 
@@ -68,15 +68,15 @@ with:
     void runSynthesis(synthSession, validReports, critiques);
 ```
 
-- [ ] **Step 2: Lint**
+- [x] **Step 2: Lint**
 
 Run: `npm run lint`. Expected: no output, exit 0.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Start the dev server, run a recon swarm with 3 agents on any topic. Expected: the server log prints exactly one `Synthesizing N reports` line and `runs/` gains exactly one new directory.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/App.tsx
@@ -94,7 +94,7 @@ git commit -m "fix: synthesis fired twice per run (Strict Mode double-invoked th
 - Produces: `runUniversalStream(...): Promise<{ truncated: boolean }>`. Existing callers that ignore the return value keep working.
 - Produces: `const TRUNCATION_MARKER = "\n\n> ⚠ OUTPUT TRUNCATED: the provider stopped at its output token limit. The report above is incomplete.";`
 
-- [ ] **Step 1: Change the signature and add the marker constant**
+- [x] **Step 1: Change the signature and add the marker constant**
 
 Above `runUniversalStream`, add:
 
@@ -104,7 +104,7 @@ const TRUNCATION_MARKER = "\n\n> ⚠ OUTPUT TRUNCATED: the provider stopped at i
 
 Change `): Promise<void> {` to `): Promise<{ truncated: boolean }> {` and add `let truncated = false;` as the first line of the body (before `const { provider, ... }`).
 
-- [ ] **Step 2: Gemini**
+- [x] **Step 2: Gemini**
 
 Replace the chunk loop:
 
@@ -133,7 +133,7 @@ with:
     return { truncated };
 ```
 
-- [ ] **Step 3: Anthropic**
+- [x] **Step 3: Anthropic**
 
 Replace the inner parse:
 
@@ -168,7 +168,7 @@ The `try { ... } catch (e) { /* ignore partial */ }` around it would swallow the
 
 and change the Anthropic branch's trailing `return;` to `return { truncated };`.
 
-- [ ] **Step 4: OpenAI-compatible**
+- [x] **Step 4: OpenAI-compatible**
 
 Replace the inner parse:
 
@@ -196,7 +196,7 @@ with:
 
 Same catch change as Step 3. Add `return { truncated };` as the last line of the function.
 
-- [ ] **Step 5: Agent-run caller appends the marker**
+- [x] **Step 5: Agent-run caller appends the marker**
 
 In `/api/research/agent-run-stream`, change `await runUniversalStream(` to `const { truncated } = await runUniversalStream(` and before `res.write(... type: "done" ...)` add:
 
@@ -207,7 +207,7 @@ In `/api/research/agent-run-stream`, change `await runUniversalStream(` to `cons
         }
 ```
 
-- [ ] **Step 6: Synthesis caller appends the marker**
+- [x] **Step 6: Synthesis caller appends the marker**
 
 In `/api/research/synthesize-stream`, change `await runUniversalStream(` to `const { truncated } = await runUniversalStream(` and before `console.log(\`Synthesis generation complete...` add:
 
@@ -219,7 +219,7 @@ In `/api/research/synthesize-stream`, change `await runUniversalStream(` to `con
         }
 ```
 
-- [ ] **Step 7: Lint, verify, commit**
+- [x] **Step 7: Lint, verify, commit**
 
 Run: `npm run lint`. Expected: exit 0.
 
@@ -244,7 +244,7 @@ git commit -m "fix: stream parsers surface provider errors and flag token-limit 
   - `function assembleConditionedTopic(directive: string, rawTopic: string): string`
 - Consumes: `runUniversalStream`, `JSON_CALL_TIMEOUT_MS`.
 
-- [ ] **Step 1: Add the constants, prompt builder, assembler and function**
+- [x] **Step 1: Add the constants, prompt builder, assembler and function**
 
 ```ts
 // -------------------------------------------------------------
@@ -366,7 +366,7 @@ async function conditionDirective(rawTopic: string, settings: any, cfg: Conditio
 }
 ```
 
-- [ ] **Step 2: Lint and commit**
+- [x] **Step 2: Lint and commit**
 
 Run: `npm run lint`. Expected: exit 0 (the function is unused for now; tsc does not flag unused functions).
 
@@ -386,7 +386,7 @@ git commit -m "feat(server): directive conditioner function and prompt"
 - Produces: `/api/research/initiate` response gains `rawTopic: string` always and `directive: string` (the full conditioned topic) when conditioning ran.
 - Produces: `/api/research/synthesize-stream` accepts optional `rawTopic` and writes it into `inputs.json` and `meta.json`; the run directory slug uses it.
 
-- [ ] **Step 1: Initiate head**
+- [x] **Step 1: Initiate head**
 
 After `const delta = !!(priorContext && priorContext.delta);` insert:
 
@@ -419,22 +419,22 @@ After `const delta = !!(priorContext && priorContext.delta);` insert:
 
 Remove the now-duplicate `if (savedAgents.length < 2) { return res.status(400)... }` inside the `if (roster) {` block.
 
-- [ ] **Step 2: Use the effective topic in both orchestrator prompts**
+- [x] **Step 2: Use the effective topic in both orchestrator prompts**
 
 Line 1292: `RESEARCH REQUEST: "${topic}"${followUpFraming2}` → `RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming2}`.
 Line 1399: `RESEARCH REQUEST: "${topic}"${followUpFraming}` → `RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming}`.
 The `console.log(\`Assembling ...for topic: "${topic}"` line: change `"${topic}"` to `"${rawTopic.slice(0, 120)}"${conditioned ? " [conditioned]" : ""}`.
 
-- [ ] **Step 3: Return the directive**
+- [x] **Step 3: Return the directive**
 
 Line 1388: `return res.json({ agents: rosterAgents, needAnalysis: rosterNeedAnalysis });` → `return res.json({ agents: rosterAgents, needAnalysis: rosterNeedAnalysis, rawTopic, ...(conditioned ? { directive: conditioned } : {}) });`
 Line 1569: `res.json({ agents: cleanAgents, needAnalysis });` → `res.json({ agents: cleanAgents, needAnalysis, rawTopic, ...(conditioned ? { directive: conditioned } : {}) });`
 
-- [ ] **Step 4: Persistence carries rawTopic**
+- [x] **Step 4: Persistence carries rawTopic**
 
 In `/api/research/synthesize-stream`: destructure `rawTopic` from `req.body`; `const title = typeof rawTopic === "string" && rawTopic.trim() ? rawTopic : topic;`; the run dir uses `slugify(title)`; `inputs.json` JSON gains `rawTopic: title`; `meta.json` JSON gains `rawTopic: title`.
 
-- [ ] **Step 5: Lint, verify, commit**
+- [x] **Step 5: Lint, verify, commit**
 
 Run: `npm run lint`. Expected: exit 0.
 
@@ -463,7 +463,7 @@ git commit -m "feat(server): run the directive conditioner in initiate; persist 
 **Interfaces:**
 - Produces: `SwarmConfig.conditionDirective?: boolean`, `ResearchSession.rawTopic?: string`, `export const sessionTitle = (s: { topic: string; rawTopic?: string }) => s.rawTopic ?? s.topic;` in `src/types.ts`.
 
-- [ ] **Step 1: Types**
+- [x] **Step 1: Types**
 
 In `SwarmConfig` add after `rosterMode?: boolean;`:
 
@@ -492,11 +492,11 @@ At the end of `src/types.ts`:
 export const sessionTitle = (s: { topic: string; rawTopic?: string }): string => s.rawTopic ?? s.topic;
 ```
 
-- [ ] **Step 2: Config parse and default**
+- [x] **Step 2: Config parse and default**
 
 In the `useState<SwarmConfig>` initializer, add to the returned object: `conditionDirective: parsed.conditionDirective !== false,` and change the fallback to `return { agentCount: "auto", depth: "standard", conditionDirective: true };`.
 
-- [ ] **Step 3: Toggle**
+- [x] **Step 3: Toggle**
 
 Add `const CONDITIONER_HEX = "#f59e0b";` next to `FRINGE_HEX`. After the Red Team toggle `</div>` (before the component's closing `</div>`), add:
 
@@ -540,7 +540,7 @@ Add `const CONDITIONER_HEX = "#f59e0b";` next to `FRINGE_HEX`. After the Red Tea
       </div>
 ```
 
-- [ ] **Step 4: Initiate wiring**
+- [x] **Step 4: Initiate wiring**
 
 In `handleInitiateResearch`, `newSession` gains `rawTopic: searchTopic,`. After `const data = await response.json();` add:
 
@@ -561,7 +561,7 @@ In `handleInitiateResearch`, `newSession` gains `rawTopic: searchTopic,`. After 
 
 In `runSynthesis` payload add `rawTopic: currentSession.rawTopic,`.
 
-- [ ] **Step 5: Titles and relaunch**
+- [x] **Step 5: Titles and relaunch**
 
 Import `sessionTitle` from `./types` in `src/App.tsx`, `src/components/ClaimAtlas.tsx`, `src/components/KnowledgeLibrary.tsx`, `src/lib/dossier.tsx` (match each file's existing import path for types).
 
@@ -584,7 +584,7 @@ Replace:
 - `dossier.tsx:238` `{session.topic}` → `{sessionTitle(session)}`
 - `dossier.tsx:395` `escapeHtml(session.topic)` → `escapeHtml(sessionTitle(session))`
 
-- [ ] **Step 6: Lint, verify, commit**
+- [x] **Step 6: Lint, verify, commit**
 
 Run: `npm run lint`. Expected: exit 0.
 
@@ -602,7 +602,7 @@ git commit -m "feat(ui): Directive Conditioner toggle, rawTopic titles, conditio
 **Files:**
 - Modify: `server.ts:945` (shared grounding rule), `server.ts:1952` (density mandate opening bullet), `server.ts:1859-1861` (VEX directive).
 
-- [ ] **Step 1: Search honesty**
+- [x] **Step 1: Search honesty**
 
 Replace the bullet:
 
@@ -616,7 +616,7 @@ with:
 - Never describe a search you did not actually run. The LIVE WEB SEARCH RESULTS block lists the searches the research system ran for you; if you have a web search tool of your own, searches you run with it are yours to report, by their exact query. A methodology section describes exactly those searches and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
 ```
 
-- [ ] **Step 2: Fringe opening**
+- [x] **Step 2: Fringe opening**
 
 Change the DENSITY MANDATE's first bullet to be mode-dependent. Replace:
 
@@ -632,7 +632,7 @@ ${fringe
         : "- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame."}
 ```
 
-- [ ] **Step 3: VEX authority**
+- [x] **Step 3: VEX authority**
 
 Replace the three bullets under `## 4.5 Red Team Findings & Rebuttals`:
 
@@ -650,7 +650,7 @@ with:
 - Where VEX rated a specialist report Low reliability, state plainly how that bounds the confidence of the conclusions that depend on it.
 ```
 
-- [ ] **Step 4: Lint, commit**
+- [x] **Step 4: Lint, commit**
 
 Run: `npm run lint`. Expected: exit 0.
 
@@ -666,15 +666,15 @@ git commit -m "prompts: resolve search-honesty, fringe-verdict and VEX-authority
 **Files:**
 - Modify: `README.md` (API Reference rows for `initiate` and `synthesize-stream`), `HANDOFF.md` (new top entry), `docs/superpowers/plans/2026-10-08-directive-conditioner.md` (tick boxes).
 
-- [ ] **Step 1: README API rows**
+- [x] **Step 1: README API rows**
 
 In the API Reference table, extend the `POST /api/research/initiate` row's response description with `rawTopic` and `directive` (present when the Directive Conditioner ran), and the `POST /api/research/synthesize-stream` row's request with optional `rawTopic`. Add a short "Directive Conditioner" paragraph under the pipeline description: what it does, that it is a launch-panel toggle defaulting on, and that the original input is appended verbatim.
 
-- [ ] **Step 2: HANDOFF.md**
+- [x] **Step 2: HANDOFF.md**
 
 Add a dated entry at the top following the existing format: Done (the four commits), In flight (none), Next (run a real deep swarm with the conditioner on and compare against the LIMEN run; then decide on multi-pass synthesis), Watch out (conditioner adds one orchestrator-model call per fresh run; `runs/` pairs before today are the double-fire, not two user runs).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md HANDOFF.md docs/superpowers/plans/2026-10-08-directive-conditioner.md

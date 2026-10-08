@@ -694,6 +694,125 @@ FOLLOW-UP DIRECTIVE FROM THE USER: "${directive}"`;
 }
 
 // -------------------------------------------------------------
+// Directive Conditioner
+// -------------------------------------------------------------
+// The best runs this app has produced used a full research DIRECTIVE as the
+// topic (primary question, epistemic categories, coverage, failure modes,
+// numbered deliverables, research behaviour, success condition) followed by
+// the user's own context. Plain one-line topics underperform with the same
+// prompts. This step writes that directive for any input. The model writes
+// ONLY the directive; the server appends the user's input verbatim, so
+// nothing the user wrote can be shortened or lost.
+
+interface ConditionerConfig {
+  depth: "recon" | "standard" | "deep";
+  fringe: boolean;
+  redTeam: boolean;
+  agentCount: number | "auto";
+}
+
+const CONDITIONER_MAX_INPUT_WORDS = 12000;
+const CONDITIONER_MIN_OUTPUT_WORDS = 300;
+
+const CONDITIONER_SYSTEM = "You are the Directive Conditioner for a multi-agent research swarm. You turn a research request into a complete, machine-fitted research directive. You structure; you never research, never answer the question, and never restate the user's context back to them.";
+
+const CONTEXT_FENCE_HEADER = "# AUTHORITATIVE CONTEXT (verbatim user input — treat as the project baseline; do not summarize it back)";
+
+function assembleConditionedTopic(directive: string, rawTopic: string): string {
+  return `${directive.trim()}\n\n---\n\n${CONTEXT_FENCE_HEADER}\n\n${rawTopic.trim()}`;
+}
+
+function buildConditionerPrompt(rawTopic: string, cfg: ConditionerConfig): string {
+  const deliverableCount = cfg.depth === "recon" ? 3 : cfg.depth === "deep" ? 7 : 5;
+  const wordTarget = cfg.depth === "recon" ? "900-1,400" : cfg.depth === "deep" ? "1,800-2,600" : "1,300-2,000";
+  const agentFloors = cfg.depth === "recon" ? "800-1,200" : cfg.depth === "deep" ? "5,000-8,000" : "2,500-4,000";
+  const synthFloor = cfg.depth === "recon" ? "1,500-2,500" : cfg.depth === "deep" ? "8,000-12,000" : "4,000-6,000";
+  const epistemic = cfg.fringe
+    ? `Use the case-file provenance tags this pipeline already enforces: [primary text], [community lore], [witness testimony], [documented anomaly], [official record], [verified]. Add [design choice] and [open question] if the request is about building or deciding something.`
+    : `Define four to six labelled categories every claim must be tagged with. Default set: ESTABLISHED FACT (sourced, uncontested), REPORTED CLAIM (sourced, contested or single-source), INFERENCE (the agent's reasoning from facts), DESIGN CHOICE (a recommendation, not a finding), OPEN QUESTION (could not be settled this run). Rename or extend them to fit the request's domain.`;
+  const verdictLine = cfg.fringe
+    ? "This is a CASE FILE run: the synthesis opens with the state of the evidence and may legitimately conclude insufficient-to-conclude. The success condition must not demand a verdict."
+    : "The synthesis opens with the direct answer to the primary question (the pick, the ranking, the verdict, the design). The success condition must say what that answer looks like.";
+
+  return `Today's date is ${new Date().toDateString()}.
+
+THE PIPELINE THIS DIRECTIVE WILL DRIVE (write for this machine, not for a chatbot):
+- An orchestrator reads the directive, writes a need analysis, and sprouts ${cfg.agentCount === "auto" ? "3-9" : cfg.agentCount} specialist agents from it. Each agent runs SEQUENTIALLY and writes a ${agentFloors}-word report (depth: ${cfg.depth.toUpperCase()}).
+- Every agent is web-grounded: the server runs SearXNG searches planned from the directive and the agent's assignment, fetches full page text from the top-ranked hits, and injects both into the agent's prompt; deep runs add a second search wave written from the first wave's results. Agents can quote and cite only what those searches return (plus native search on Gemini/Anthropic). They have no code execution, no file access, no databases.
+- ${cfg.redTeam ? "A Red Team pass (VEX) cross-examines each report WITHOUT web access before synthesis." : "No Red Team pass this run."}
+- A single synthesis model folds every report into one ${synthFloor}-word document with a fixed structure (executive summary, tracks and methodology, thematic insights, conflict/consensus/uncertainty, recommendations, conclusion, Source Ledger). ${verdictLine}
+- Deliverables you specify must be things that structure can hold: tables, matrices, ranked lists, labelled sections, pipelines. Nothing interactive, nothing that needs tools the agents lack.
+
+THE RESEARCH REQUEST (verbatim; the server will append this under an AUTHORITATIVE CONTEXT fence after your directive, so do NOT copy, summarize, or paraphrase it back):
+<<<REQUEST
+${rawTopic.trim()}
+REQUEST>>>
+
+YOUR JOB: write the DIRECTIVE that sits above that context. ${wordTarget} words of Markdown. Required sections, in this order, with these exact top-level headers:
+
+# <TITLE> — RESEARCH DIRECTIVE
+Two to six sentences of framing: what this run must produce, what it must NOT do (no broad histories, no restating context, no re-deriving what the request already establishes), and what the request already treats as settled.
+
+# PRIMARY QUESTION
+One question in a blockquote, then two to four sentences on the goal: what a useful answer is for, and what it is not for.
+
+# CRITICAL DESIGN PRINCIPLE
+The one constraint that most changes how agents should think about this request (for example: who the real decision-maker is, what must never be inherited, what the answer must be optimized for). If the request implies none, write one that sharpens the primary question. One short header line plus one paragraph.
+
+# REQUIRED EPISTEMIC SEPARATION
+${epistemic} One line per category: the label and the rule for using it.
+
+# COVERAGE
+The components, entities, functions, angles or candidates that MUST be addressed, as a bulleted list derived from the request. You may add obvious adjacent items; mark each added one "(added)". Agents are forbidden from skipping any listed item.
+
+# KNOWN FAILURE MODES
+At least ${cfg.depth === "recon" ? 3 : 5} traps specific to THIS topic (not generic research advice), each as a short bold name and one line on how an agent would detect it.
+
+# REQUIRED DELIVERABLES
+Exactly ${deliverableCount} numbered deliverables. For each: a short name, the shape (table with named columns / ranked list / matrix / labelled section / pipeline), and one line on what it must contain. These become the backbone of the synthesis; make them concrete enough that a missing one is obvious.
+
+# RESEARCH BEHAVIOR
+When agents should use live web search and when they should rely on the authoritative context; which kinds of sources are primary for this request; what "already known" means here so agents do not re-research it; and the rule that absence from a limited search is never evidence of absence.
+
+# SUCCESS CONDITION
+What a passing synthesis looks like, in the requester's own terms: three to six bullet points that could be checked against the final document.
+
+RULES:
+- IMPROVE, DO NOT REPLACE. If the request already contains any of these sections or their equivalents (a stated primary question, deliverables, constraints, failure modes, a success condition), carry that material into the matching section VERBATIM and fill only what is missing. A request that is already a full directive should come out nearly unchanged plus the sections it lacked.
+- Never research, never answer the question, never invent facts about the subject. Your knowledge of the domain may shape COVERAGE and KNOWN FAILURE MODES; it may not supply findings.
+- Never copy or summarize the request text into the directive except where the IMPROVE rule requires carrying a section forward.
+- Write in direct imperative prose. No preamble, no closing remarks, no commentary about this task. Output the directive only, starting with the title header.`;
+}
+
+async function conditionDirective(rawTopic: string, settings: any, cfg: ConditionerConfig): Promise<string | null> {
+  const inputWords = rawTopic.trim().split(/\s+/).filter(Boolean).length;
+  if (inputWords > CONDITIONER_MAX_INPUT_WORDS) {
+    console.warn(`[Conditioner] skipped: input is ${inputWords} words (ceiling ${CONDITIONER_MAX_INPUT_WORDS}).`);
+    return null;
+  }
+  const prompt = buildConditionerPrompt(rawTopic, cfg);
+  let acc = "";
+  try {
+    await Promise.race([
+      runUniversalStream("orchestrator", settings, prompt, CONDITIONER_SYSTEM, false, (t) => { acc += t; }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`conditioner timed out after ${JSON_CALL_TIMEOUT_MS / 1000}s`)), JSON_CALL_TIMEOUT_MS)),
+    ]);
+  } catch (err: any) {
+    console.warn(`[Conditioner] failed, using raw topic: ${err?.message || err}`);
+    return null;
+  }
+  const directive = acc.trim();
+  const outWords = directive.split(/\s+/).filter(Boolean).length;
+  const hasPrimary = /^#\s*PRIMARY QUESTION/m.test(directive);
+  if (outWords < CONDITIONER_MIN_OUTPUT_WORDS || !hasPrimary) {
+    console.warn(`[Conditioner] output rejected (${outWords} words, primary-question header ${hasPrimary ? "present" : "missing"}); using raw topic.`);
+    return null;
+  }
+  console.log(`[Conditioner] expanded ${inputWords} → ${outWords} directive words.`);
+  return directive;
+}
+
+// -------------------------------------------------------------
 // Fringe Mode — case-file investigation prompt blocks
 // -------------------------------------------------------------
 // The toggle flips the pipeline from verdict-oriented reporting to evidence
@@ -910,6 +1029,10 @@ async function generateUnifiedJSON(
   return extractJSON(responseText);
 }
 
+// Appended to a report when the provider stopped at its output token limit,
+// so a cut-off document is never mistaken for a finished one.
+const TRUNCATION_MARKER = "\n\n> ⚠ OUTPUT TRUNCATED: the provider stopped at its output token limit. The report above is incomplete.";
+
 async function runUniversalStream(
   taskRole: "orchestrator" | "agent" | "synthesis",
   settings: any,
@@ -922,7 +1045,8 @@ async function runUniversalStream(
   // Opt-in two-wave iterative deepening. Only full agent investigations set
   // this; interrogation answers stay single-wave for responsiveness.
   deepenSearch?: boolean
-): Promise<void> {
+): Promise<{ truncated: boolean }> {
+  let truncated = false;
   const { provider, model, apiKey, baseUrl } = getModelAndKey(taskRole, settings);
 
   // Local SearXNG grounding is the workhorse for EVERY provider — native
@@ -943,7 +1067,7 @@ async function runUniversalStream(
           : "- You have NO search capability of your own — no Google, no databases, no registries, no archives. The searches listed in the LIVE WEB SEARCH RESULTS block are the ONLY searches that were run, by the research system, on your behalf.";
         prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory):
 ${noOwnSearch}
-- NEVER claim to have searched, queried, or checked any engine, database, or source yourself. If your report includes a methodology section, it must describe exactly the queries listed above and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
+- Never describe a search you did not actually run. The LIVE WEB SEARCH RESULTS block lists the searches the research system ran for you; if you have a web search tool of your own, searches you run with it are yours to report, by their exact query. A methodology section describes exactly those searches and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
 - Ground every time-sensitive claim in the numbered results and cite them inline with their URLs. Where the results do not cover a point, write "the provided live results do not cover this" — do not fill the gap with memorized training data presented as current.
 - Result dates may differ from your stated date by up to a day due to timezones. That is normal publishing skew, not an anomaly — do not build theories on it.`;
         onGrounding?.({ mode: "injected", detail: `${hitCount} live search results + ${pages} full-page extracts injected via ${engine} across ${waves} search wave${waves === 1 ? "" : "s"} — seed queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
@@ -986,8 +1110,13 @@ ${noOwnSearch}
       if (chunk.text) {
         onChunk(chunk.text);
       }
+      const finish = chunk.candidates?.[0]?.finishReason as string | undefined;
+      if (finish === "MAX_TOKENS") truncated = true;
+      else if (finish === "SAFETY" || finish === "RECITATION" || finish === "PROHIBITED_CONTENT") {
+        throw new Error(`Gemini stopped the stream: finishReason=${finish}.`);
+      }
     }
-    return;
+    return { truncated };
   }
 
   if (provider === "anthropic") {
@@ -1034,14 +1163,19 @@ ${noOwnSearch}
             const parsed = JSON.parse(cleanLine.substring(6));
             if (parsed.type === "content_block_delta" && parsed.delta?.text) {
               onChunk(parsed.delta.text);
+            } else if (parsed.type === "message_delta" && parsed.delta?.stop_reason === "max_tokens") {
+              truncated = true;
+            } else if (parsed.type === "error") {
+              throw new Error(`Anthropic stream error: ${parsed.error?.message || JSON.stringify(parsed.error || parsed)}`);
             }
-          } catch (e) {
-            // Ignore partial chunk parsing errors
+          } catch (e: any) {
+            if (e instanceof SyntaxError) continue; // partial chunk
+            throw e;
           }
         }
       }
     }
-    return;
+    return { truncated };
   }
 
   // OpenAI-compatible providers
@@ -1104,16 +1238,22 @@ ${noOwnSearch}
       if (cleanLine.startsWith("data: ")) {
         try {
           const parsed = JSON.parse(cleanLine.substring(6));
+          if (parsed.error) {
+            throw new Error(`${provider.toUpperCase()} stream error: ${parsed.error.message || JSON.stringify(parsed.error)}`);
+          }
           const text = parsed.choices?.[0]?.delta?.content || "";
           if (text) {
             onChunk(text);
           }
-        } catch (e) {
-          // Ignore partial chunk JSON parses
+          if (parsed.choices?.[0]?.finish_reason === "length") truncated = true;
+        } catch (e: any) {
+          if (e instanceof SyntaxError) continue; // partial chunk
+          throw e;
         }
       }
     }
   }
+  return { truncated };
 }
 
 async function startServer() {
@@ -1267,16 +1407,37 @@ async function startServer() {
         depthHint = "\nDEPTH MODE — DEEP: Make each agent's assignment maximally ambitious and far-reaching, probing edge cases, second-order effects, and deep technical frontiers.";
       }
 
-      console.log(`Assembling ${delta ? "DELTA-SWEEP " : priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}${roster ? "ROSTER " : ""}research swarm for topic: "${topic}" (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
+      // Roster Mode needs its library before anything is spent on conditioning.
+      if (roster && savedAgents.length < 2) {
+        return res.status(400).json({ error: "Roster Mode needs at least 2 agents in your Agent Library. Save specialists from a swarm (bookmark icon on their card) or forge them in the Agent Library, then relaunch." });
+      }
+
+      // Directive Conditioner: fresh runs only (follow-ups and delta sweeps
+      // already carry a directive and prior context). Default ON; the
+      // client sends conditionDirective: false to bypass.
+      const rawTopic = String(topic);
+      const wantsConditioning = !priorBlock && !(config && config.conditionDirective === false);
+      let effectiveTopic = rawTopic;
+      let conditioned: string | null = null;
+      if (wantsConditioning) {
+        const directive = await conditionDirective(rawTopic, settings, {
+          depth,
+          fringe,
+          redTeam: !!(config && config.redTeam),
+          agentCount: pinnedCount ?? "auto",
+        });
+        if (directive) {
+          conditioned = assembleConditionedTopic(directive, rawTopic);
+          effectiveTopic = conditioned;
+        }
+      }
+
+      console.log(`Assembling ${delta ? "DELTA-SWEEP " : priorBlock ? "FOLLOW-UP " : ""}${fringe ? "FRINGE " : ""}${roster ? "ROSTER " : ""}research swarm for topic: "${rawTopic.slice(0, 120)}"${conditioned ? " [conditioned]" : ""} (${pinnedCount ?? "auto"} agents, ${depth} depth)`);
 
       // ROSTER MODE: draft exclusively from the user's saved Agent Library.
       // A fully separate early-return path — the default on-the-fly generation
       // below is deliberately untouched.
       if (roster) {
-        if (savedAgents.length < 2) {
-          return res.status(400).json({ error: "Roster Mode needs at least 2 agents in your Agent Library. Save specialists from a swarm (bookmark icon on their card) or forge them in the Agent Library, then relaunch." });
-        }
-
         const maxPick = Math.min(9, savedAgents.length);
         const rosterListing = savedAgents
           .map((a: any) => `- id "${a.id}" — ${a.name}, ${a.role}. Standing specialty: ${String(a.investigativeAngle || "").slice(0, 400)}`)
@@ -1289,7 +1450,7 @@ async function startServer() {
 
         const rosterPrompt = `Today's date is ${today2}.
 
-RESEARCH REQUEST: "${topic}"${followUpFraming2}
+RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming2}
 
 ROSTER MODE: You must draft the team EXCLUSIVELY from the user's saved Agent Library below. You may NOT invent new agents, rename anyone, or alter identities — selection and per-mission tasking only.
 
@@ -1385,7 +1546,7 @@ Select ${pinnedCount ? `exactly ${Math.min(pinnedCount, maxPick)}` : `between 2 
           };
         });
 
-        return res.json({ agents: rosterAgents, needAnalysis: rosterNeedAnalysis });
+        return res.json({ agents: rosterAgents, needAnalysis: rosterNeedAnalysis, rawTopic, ...(conditioned ? { directive: conditioned } : {}) });
       }
 
       const today = new Date().toDateString();
@@ -1396,7 +1557,7 @@ Select ${pinnedCount ? `exactly ${Math.min(pinnedCount, maxPick)}` : `between 2 
         : "";
       const prompt = `Today's date is ${today}.
 
-RESEARCH REQUEST: "${topic}"${followUpFraming}
+RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming}
 
 Work in two phases.
 
@@ -1566,7 +1727,7 @@ Design ${pinnedCount ? `exactly ${pinnedCount}` : "between 3 and 9 (your call �
         colorTheme: a.colorTheme || "cyan"
       }));
 
-      res.json({ agents: cleanAgents, needAnalysis });
+      res.json({ agents: cleanAgents, needAnalysis, rawTopic, ...(conditioned ? { directive: conditioned } : {}) });
     } catch (error: any) {
       console.error("Error in /api/research/initiate:", error);
       res.status(500).json({ error: error.message || "Failed to assemble research agents." });
@@ -1767,7 +1928,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       }, 5000);
 
       try {
-        await runUniversalStream(
+        const { truncated } = await runUniversalStream(
           "agent",
           settings,
           prompt,
@@ -1785,6 +1946,10 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
         );
 
         clearInterval(pingInterval);
+        if (truncated) {
+          console.warn(`[Truncation] ${agent.name}: provider hit its output token limit.`);
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
+        }
         res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
         res.end();
       } catch (error: any) {
@@ -1801,22 +1966,25 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
   // 3. Consolidated Synthesis Endpoint - Compiles final synthesis report
   app.post("/api/research/synthesize-stream", async (req, res) => {
     try {
-      const { topic, reports, settings, config, critiques, priorContext, catalyticTerms } = req.body;
+      const { topic, rawTopic, reports, settings, config, critiques, priorContext, catalyticTerms } = req.body;
       if (!topic || !reports || !Array.isArray(reports)) {
         return res.status(400).json({ error: "Topic and reports array are required." });
       }
       const priorBlock = formatPriorContextBlock(priorContext);
+      // Short title for the run directory and metadata: the user's original
+      // input when the Directive Conditioner expanded it, else the topic.
+      const title: string = typeof rawTopic === "string" && rawTopic.trim() ? rawTopic : String(topic);
 
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
       const delta = !!(priorContext && priorContext.delta);
 
-      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
+      console.log(`Synthesizing ${reports.length} reports for topic: "${title.slice(0, 120)}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
       // Persist the run's inputs immediately — if anything downstream dies
       // (client tab, stream, process), the specialists' work is already safe.
-      const runDir = path.join(RUNS_DIR, `${new Date().toISOString().replace(/[:.]/g, "-")}-${slugify(topic)}`);
-      persistRunFile(runDir, "inputs.json", JSON.stringify({ topic, config, critiques, catalyticTerms, reports }, null, 2));
+      const runDir = path.join(RUNS_DIR, `${new Date().toISOString().replace(/[:.]/g, "-")}-${slugify(title)}`);
+      persistRunFile(runDir, "inputs.json", JSON.stringify({ topic, rawTopic: title, config, critiques, catalyticTerms, reports }, null, 2));
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -1856,9 +2024,9 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
         if (critiquesContext) {
           critiquesBlock = `\n\nRED TEAM CRITIQUES:\nThe following adversarial cross-examinations were produced by VEX, Chief Adversarial Officer, who ruthlessly stress-tested each specialist report. Each critique flags weak evidence, blind spots, counter-evidence, and a confidence verdict (High/Medium/Low).\n\n${critiquesContext}`;
           critiqueDirective = `\n\n## 4.5 Red Team Findings & Rebuttals
-- The swarm was subjected to an adversarial red-team review by VEX. Address EVERY material critique raised above.
-- For each critique, either (a) rebut it with specific evidence drawn from the specialist reports, or (b) concede it and explicitly adjust the affected conclusions elsewhere in this synthesis.
-- Do NOT ignore any LOW-confidence verdict: where a specialist report was rated Low reliability, state plainly how that constrains the overall confidence of this synthesis.`;
+- VEX reviewed each specialist report WITHOUT web access. Critiques are internal consistency checks on the evidence as written — they are not new evidence and do not outrank a sourced finding.
+- Address each material critique in one of three ways: (a) rebut it with specific evidence from the specialist reports; (b) concede it and adjust the affected conclusions elsewhere in this synthesis; or (c) note that it raises a question this sweep did not test, and carry it into the follow-up recommendations. A critique with no evidence behind it earns (c), not a concession.
+- Where VEX rated a specialist report Low reliability, state plainly how that bounds the confidence of the conclusions that depend on it.`;
         }
       }
 
@@ -1896,10 +2064,10 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       // the briefing ARE the follow-up integration, so appending it would
       // duplicate the whole document's purpose.
       const structureBody = delta
-        ? `${DELTA_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 7. Red Team Findings & Rebuttals")}`
+        ? `${DELTA_SYNTHESIS_STRUCTURE(title)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 7. Red Team Findings & Rebuttals")}`
         : fringe
-        ? `${FRINGE_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
-        : `# ${topic}: Swarm Intelligence Synthesis
+        ? `${FRINGE_SYNTHESIS_STRUCTURE(title)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
+        : `# ${title}: Swarm Intelligence Synthesis
 
 ## 1. Executive Summary
 - High-level distillation of core discoveries.
@@ -1947,9 +2115,12 @@ ${fringe
 - Depth: Be extremely detailed. Retain the technical nuances from the specialist reports.
 - Flow: Ensure a smooth narrative transition between sections.
 - Markdown: Use clean, standard Markdown.
+- The OVERARCHING TOPIC above may be a full research directive with its own headers and an authoritative-context block. Those are INSTRUCTIONS to satisfy, not content to reproduce: never copy the directive or the context into this document. Start with the required title header below.
 
 DENSITY MANDATE (mandatory, applies to every structure and depth):
-- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame.
+${fringe
+        ? "- OPEN WITH THE FILE'S STATE: what the evidence currently supports, what it does not, and the strongest open lead — before any background. \"Insufficient to conclude\" is a valid opening. The user's constraints and context CALIBRATE that reading; they are supporting material, never the headline."
+        : "- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame."}
 - Carry the specialists' concrete material FORWARD: numbers, dates, names, prices, direct quotes, and source URLs must survive into this synthesis. Never compress a quantified finding into a vague generalization.
 - Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
 - Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
@@ -1962,7 +2133,7 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
 
       try {
         let synthesizedReport = "";
-        await runUniversalStream(
+        const { truncated } = await runUniversalStream(
           "synthesis",
           settings,
           prompt,
@@ -1975,9 +2146,14 @@ DENSITY MANDATE (mandatory, applies to every structure and depth):
         );
 
         clearInterval(pingInterval);
+        if (truncated) {
+          console.warn("[Truncation] synthesis: provider hit its output token limit.");
+          synthesizedReport += TRUNCATION_MARKER;
+          res.write(`data: ${JSON.stringify({ type: "chunk", text: TRUNCATION_MARKER })}\n\n`);
+        }
         console.log(`Synthesis generation complete. Response text length: ${synthesizedReport.length}`);
         persistRunFile(runDir, "synthesis.md", synthesizedReport);
-        persistRunFile(runDir, "meta.json", JSON.stringify({ topic, completedAt: new Date().toISOString(), chars: synthesizedReport.length, depth, fringe, delta }, null, 2));
+        persistRunFile(runDir, "meta.json", JSON.stringify({ topic, rawTopic: title, completedAt: new Date().toISOString(), chars: synthesizedReport.length, depth, fringe, delta }, null, 2));
         console.log(`Run persisted to ${runDir}`);
         res.write(`data: ${JSON.stringify({ type: "done", text: synthesizedReport })}\n\n`);
         res.end();

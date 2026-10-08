@@ -116,6 +116,10 @@ sequenceDiagram
     SPA->>User: Consolidated report in the viewer
 ```
 
+### The Directive Conditioner
+
+The runs that perform best use a full research *directive* as the topic rather than a sentence: a primary question, epistemic categories every claim must land in, the coverage that must be addressed, known failure modes, numbered deliverables, research behaviour, and a success condition, followed by the user's own context. The **Directive Conditioner** (launch-panel toggle, on by default) writes that directive for any topic before the orchestrator runs. The model writes only the directive; the server appends the original input verbatim under an `AUTHORITATIVE CONTEXT` fence, so nothing the user typed can be shortened or lost. The conditioned directive becomes the topic every pipeline call sends, while the original stays as the session title. Follow-ups and Sentinel delta sweeps are never conditioned. The full directive is written to the ops log on launch.
+
 ---
 
 ## 📸 Screenshots
@@ -217,10 +221,10 @@ All routes are served by `server.ts` on port 3369 (or the next free port above i
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | Liveness check; reports whether the server-side Gemini key is set. | JSON |
 | `POST` | `/api/settings/fetch-models` | Test a provider connection and list its available models. | JSON |
-| `POST` | `/api/research/initiate` | Orchestrator assembles 5 to 7 specialist agents for a topic. | JSON |
+| `POST` | `/api/research/initiate` | Runs the Directive Conditioner (unless `config.conditionDirective` is `false` or a `priorContext` is present), then the orchestrator analyzes the need and sprouts 3 to 9 specialist agents. Returns `agents`, `needAnalysis`, `rawTopic`, and `directive` (the full conditioned topic, present only when conditioning ran). | JSON |
 | `POST` | `/api/research/regenerate-agent` | Redesign a single agent, optionally guided by a user nudge. | JSON |
 | `POST` | `/api/research/agent-run-stream` | Run one agent's deep investigation. | SSE |
-| `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. Inputs are persisted to `runs/` on receipt, the finished synthesis on completion. | SSE |
+| `POST` | `/api/research/synthesize-stream` | Blend all specialist reports into the final report. Accepts optional `rawTopic` (the short title) alongside `topic`. Inputs are persisted to `runs/` on receipt, the finished synthesis on completion; the run directory and `meta.json` carry the short title. | SSE |
 | `GET` | `/api/research/runs` | List synthesis runs persisted on disk under `runs/`. | JSON |
 | `GET` | `/api/research/runs/:id/:file` | Read a persisted run file (`synthesis.md`, `inputs.json`, or `meta.json`). | JSON/MD |
 | `POST` | `/api/research/interrogate-stream` | Answer a follow-up question grounded in the session's reports, as the full panel or a single specialist in persona. | SSE |
@@ -283,6 +287,7 @@ The app keeps state in the browser under these `localStorage` keys:
 | v2.9.0 | Dossier Export Suite — standalone styled HTML dossier export (cover, TOC, roster, all reports, interrogation transcript), print-to-PDF with a light paper theme, and a full-screen Reader Mode with auto-TOC, font sizing, and scroll progress; GFM tables now render everywhere (remark-gfm) |
 | v3.0.0 | Knowledge Library — full-screen searchable archive of every swarm (full-text search with match locations, sort, favorite/depth/chat filters, tags, inline rename, two-step delete, direct dossier export, JSON archive import/export); history cap raised to 50 with favorite-preserving eviction |
 | v3.1.0 | Red Team — optional adversarial critique round: VEX (Chief Adversarial Officer) cross-examines every specialist report live before synthesis (weak evidence, blind spots, counter-evidence, confidence verdicts); the synthesis must rebut or concede each critique in a dedicated Findings & Rebuttals section; live Tribunal UI + rose network-view state + Red Team tab in results |
+| v3.2.0 | Directive Conditioner — expands any topic into a full research directive (primary question, epistemic categories, coverage, failure modes, deliverables, research behaviour, success condition) before launch, with the original input fenced verbatim beneath it; synthesis no longer fires twice per run (Strict Mode updater bug); stream parsers now surface provider errors and flag token-limit truncation; VEX critiques are weighed as internal review rather than outranking sourced evidence |
 
 ---
 
