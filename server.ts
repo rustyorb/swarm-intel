@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import net from "net";
+import crypto from "crypto";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -20,6 +21,12 @@ dotenv.config({ override: true });
 // runs/<timestamp>-<topic-slug>/. Best-effort by design — a disk failure logs
 // a warning and the pipeline continues.
 const RUNS_DIR = path.join(process.cwd(), "runs");
+// Generated agent portraits (gitignored). See /api/research/agent-portrait.
+const PORTRAITS_DIR = path.join(process.cwd(), "portraits");
+const PORTRAIT_MODEL = process.env.PORTRAIT_MODEL || "gemini-3.1-flash-image";
+const PORTRAIT_ACCENTS: Record<string, string> = {
+  cyan: "cyan", emerald: "emerald green", rose: "rose pink", amber: "amber", purple: "violet", indigo: "indigo", blue: "electric blue", fuchsia: "magenta",
+};
 const slugify = (s: string) =>
   String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "run";
 const persistRunFile = (runDir: string, name: string, data: string) => {
@@ -497,7 +504,8 @@ const FULL_PAGE_EXTRACT_COUNT = 10;
 // report methodology honestly.
 async function gatherLiveContext(
   queries: string[],
-  refine?: (digest: string, alreadyRun: string[]) => Promise<string[]>
+  refine?: (digest: string, alreadyRun: string[]) => Promise<string[]>,
+  onStage?: (s: StageInfo) => void
 ): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
@@ -564,6 +572,7 @@ async function gatherLiveContext(
     };
 
     // Wave 1 — landscape survey.
+    onStage?.({ stage: "searching", wave: 1 });
     await runWave(uniqueQueries);
 
     // Wave 2 — iterative deepening: queries written FROM what wave 1 actually
@@ -582,6 +591,7 @@ async function gatherLiveContext(
           .slice(0, 6);
         if (followups.length > 0) {
           console.log(`[Grounding] Wave 2 (${engine.name}): ${followups.map((q) => `"${q}"`).join(" | ")}`);
+          onStage?.({ stage: "searching", wave: 2, hits: hits.length });
           await runWave(followups);
           allQueries = [...allQueries, ...followups];
           waves = 2;
@@ -606,6 +616,7 @@ async function gatherLiveContext(
       // Full-article reading: fetch the top-ranked pages and hand the agent
       // real body text, not just search snippets.
       const toFetch = ranked.slice(0, FULL_PAGE_EXTRACT_COUNT);
+      onStage?.({ stage: "reading", pages: toFetch.length, hits: ranked.length });
       const extractResults = await Promise.allSettled(toFetch.map((h) => fetchPageExtract(h.url)));
       const extracts: string[] = [];
       extractResults.forEach((result, idx) => {
@@ -677,6 +688,16 @@ Each query is a tight search-engine string of 2-8 words, not a sentence or quest
 export interface GroundingInfo {
   mode: "native" | "injected" | "none";
   detail: string;
+}
+
+// Real pipeline stage telemetry, streamed to the client as SSE `stage`
+// events so the UI shows what an agent is actually doing instead of a
+// simulated progress bar.
+export interface StageInfo {
+  stage: "planning" | "searching" | "reading" | "reasoning" | "writing";
+  wave?: number;
+  pages?: number;
+  hits?: number;
 }
 
 // -------------------------------------------------------------
@@ -1089,12 +1110,15 @@ async function runUniversalStream(
   onGrounding?: (info: GroundingInfo) => void,
   // Opt-in two-wave iterative deepening. Only full agent investigations set
   // this; interrogation answers stay single-wave for responsiveness.
-  deepenSearch?: boolean
+  deepenSearch?: boolean,
+  // Real stage telemetry (searching / reading / reasoning / writing).
+  onStage?: (s: StageInfo) => void
 ): Promise<{ truncated: boolean; degenerate: boolean }> {
   let truncated = false;
   let degenerate = false;
   let stopRequested = false;
   let wsRun = 0;
+  let wroteAny = false;
   // Every provider loop emits through this guard instead of onChunk directly.
   const emit = (text: string) => {
     if (stopRequested || !text) return;
@@ -1108,6 +1132,10 @@ async function runUniversalStream(
       if (wsRun > WS_FORWARD_LIMIT) return;
       onChunk(text);
       return;
+    }
+    if (!wroteAny) {
+      wroteAny = true;
+      onStage?.({ stage: "writing" });
     }
     const trailing = text.match(/\s*$/);
     wsRun = trailing ? trailing[0].length : 0;
@@ -1126,7 +1154,7 @@ async function runUniversalStream(
       const refiner = deepenSearch
         ? (digest: string, alreadyRun: string[]) => refineQueriesFromResults(settings, digest, alreadyRun)
         : undefined;
-      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner);
+      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner, onStage);
       if (hitCount > 0) {
         const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
           ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
@@ -1147,6 +1175,9 @@ ${noOwnSearch}
       onGrounding?.({ mode: "none", detail: `Live search failed (${err.message}) — falling back to model knowledge` });
     }
   }
+
+  // Prompt is final from here: the model is thinking until its first token.
+  onStage?.({ stage: "reasoning" });
 
   // Providers with genuinely agentic native search also run their own real
   // queries on top of the injected block — hold them to the same honesty bar.
@@ -1343,6 +1374,8 @@ async function startServer() {
 
   // Parse JSON payloads (support larger payload size for multiple research reports)
   app.use(express.json({ limit: "15mb" }));
+  // Generated agent portraits; immutable per persona key, so cache hard.
+  app.use("/portraits", express.static(PORTRAITS_DIR, { maxAge: "30d", immutable: true }));
 
   // API Health Endpoint — env_keys reports which providers have server-side
   // .env keys (booleans only) so the Settings UI can enable fetching.
@@ -1872,6 +1905,9 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       if (!topic || !agent) {
         return res.status(400).json({ error: "Topic and agent configuration are required." });
       }
+      req.on("close", () => {
+        if (!res.writableEnded) console.warn(`[Client] disconnected mid-stream from agent ${agent.name} — provider call continues to completion.`);
+      });
       // Baseline search strings come from the user's short topic, never from
       // a conditioned directive whose first 160 chars are a title line.
       const queryTopic: string = typeof rawTopic === "string" && rawTopic.trim() ? rawTopic.trim() : String(topic);
@@ -1991,6 +2027,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       // Concretize the mandate into named-entity queries (one extra
       // orchestrator-model call). Keep one raw-topic query as a baseline;
       // fall back to the naive set entirely if planning fails.
+      res.write(`data: ${JSON.stringify({ type: "stage", stage: "planning" })}\n\n`);
       const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings);
       // Exact-phrase and de-glued variants of the topic ride along regardless
       // of planner quality — a niche identifier must always get a direct hunt.
@@ -2024,7 +2061,8 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
             console.log(`[Grounding] ${agent.name}: ${info.mode} — ${info.detail}`);
             res.write(`data: ${JSON.stringify({ type: "grounding", mode: info.mode, detail: info.detail })}\n\n`);
           },
-          true
+          true,
+          (s) => res.write(`data: ${JSON.stringify({ type: "stage", ...s })}\n\n`)
         );
 
         clearInterval(pingInterval);
@@ -2057,6 +2095,9 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       }
       // Strip blank filler before anything reads or persists the reports.
       const reports: any[] = rawReports.map((r: any) => (r && typeof r.report === "string" ? { ...r, report: sanitizeReport(r.report) } : r));
+      req.on("close", () => {
+        if (!res.writableEnded) console.warn("[Client] disconnected mid-synthesis — provider call continues; the run still persists to runs/.");
+      });
       const priorBlock = formatPriorContextBlock(priorContext);
       // Short title for the run directory and metadata: the user's original
       // input when the Directive Conditioner expanded it, else the topic.
@@ -2229,7 +2270,11 @@ ${fringe
           (text: string) => {
             synthesizedReport += text;
             res.write(`data: ${JSON.stringify({ type: "chunk", text })}\n\n`);
-          }
+          },
+          undefined,
+          undefined,
+          undefined,
+          (s) => res.write(`data: ${JSON.stringify({ type: "stage", ...s })}\n\n`)
         );
 
         clearInterval(pingInterval);
@@ -2291,6 +2336,47 @@ ${fringe
       res.type(file.endsWith(".json") ? "application/json" : "text/markdown").send(fs.readFileSync(p, "utf8"));
     } catch (error: any) {
       res.status(500).json({ error: error?.message || "Failed to read run file." });
+    }
+  });
+
+  // 3.2b. Agent portraits — one generated headshot per persona, cached on
+  // disk under portraits/<sha1(name|role)>.png and served statically, so a
+  // Roster Mode agent keeps the same face across runs. Failure returns a
+  // null url and the client keeps its pixel avatar; never blocks a run.
+  app.post("/api/research/agent-portrait", async (req, res) => {
+    try {
+      const { name, role, investigativeAngle, colorTheme, fringe } = req.body || {};
+      if (!name || !role) return res.status(400).json({ error: "name and role are required." });
+      const key = crypto.createHash("sha1").update(`${String(name).trim().toLowerCase()}|${String(role).trim().toLowerCase()}`).digest("hex");
+      const file = path.join(PORTRAITS_DIR, `${key}.png`);
+      const url = `/portraits/${key}.png`;
+      if (fs.existsSync(file)) return res.json({ url, cached: true });
+
+      const geminiKey = (req.body.settings?.providers?.gemini?.apiKey as string) || process.env.GEMINI_API_KEY || "";
+      if (!geminiKey) return res.json({ url: null, error: "No Gemini key for image generation." });
+
+      const accent = PORTRAIT_ACCENTS[String(colorTheme)] || "warm amber";
+      const prompt = `Square head-and-shoulders portrait of a fictional specialist named ${name}, a ${role}.
+Style: retro-futurist intelligence operative, ${fringe ? "noir case-file investigator, " : ""}painterly with fine film grain, dark warm-black background, strong ${accent} rim light with a soft amber key light, cyber-noir mood, subtle wearable tech or a prop that hints at the role (${String(investigativeAngle || "").slice(0, 160)}).
+Composition: face centered, looking just off camera, shoulders up, single subject, no text, no letters, no logos, no watermark, no frame, no border.
+The person is invented: do not depict any real or famous individual.`;
+
+      const client = new GoogleGenAI({ apiKey: geminiKey });
+      const result = await client.models.generateContent({
+        model: PORTRAIT_MODEL,
+        contents: prompt,
+        config: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: "1:1" } } as any,
+      });
+      const parts: any[] = (result as any)?.candidates?.[0]?.content?.parts || [];
+      const img = parts.find((p) => p?.inlineData?.data);
+      if (!img) return res.json({ url: null, error: "Image model returned no image." });
+      fs.mkdirSync(PORTRAITS_DIR, { recursive: true });
+      fs.writeFileSync(file, Buffer.from(img.inlineData.data, "base64"));
+      console.log(`[Portrait] ${name} (${role}) → ${url}`);
+      res.json({ url, cached: false });
+    } catch (error: any) {
+      console.warn(`[Portrait] failed: ${error?.message || error}`);
+      res.json({ url: null, error: error?.message || "Portrait generation failed." });
     }
   });
 
