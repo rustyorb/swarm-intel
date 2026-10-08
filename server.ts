@@ -1979,7 +1979,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       const fringe = !!(config && config.fringeMode);
       const delta = !!(priorContext && priorContext.delta);
 
-      console.log(`Synthesizing ${reports.length} reports for topic: "${topic}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
+      console.log(`Synthesizing ${reports.length} reports for topic: "${title.slice(0, 120)}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
       // Persist the run's inputs immediately — if anything downstream dies
       // (client tab, stream, process), the specialists' work is already safe.
@@ -2064,10 +2064,10 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       // the briefing ARE the follow-up integration, so appending it would
       // duplicate the whole document's purpose.
       const structureBody = delta
-        ? `${DELTA_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 7. Red Team Findings & Rebuttals")}`
+        ? `${DELTA_SYNTHESIS_STRUCTURE(title)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 7. Red Team Findings & Rebuttals")}`
         : fringe
-        ? `${FRINGE_SYNTHESIS_STRUCTURE(topic)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
-        : `# ${topic}: Swarm Intelligence Synthesis
+        ? `${FRINGE_SYNTHESIS_STRUCTURE(title)}${critiqueDirective.replace("## 4.5 Red Team Findings & Rebuttals", "## 8. Case Audit — Findings & Responses")}${followUpSectionDirective.replace("## 4.7 Follow-Up Integration", "## 9. Follow-Up Integration")}`
+        : `# ${title}: Swarm Intelligence Synthesis
 
 ## 1. Executive Summary
 - High-level distillation of core discoveries.
@@ -2115,6 +2115,7 @@ ${fringe
 - Depth: Be extremely detailed. Retain the technical nuances from the specialist reports.
 - Flow: Ensure a smooth narrative transition between sections.
 - Markdown: Use clean, standard Markdown.
+- The OVERARCHING TOPIC above may be a full research directive with its own headers and an authoritative-context block. Those are INSTRUCTIONS to satisfy, not content to reproduce: never copy the directive or the context into this document. Start with the required title header below.
 
 DENSITY MANDATE (mandatory, applies to every structure and depth):
 - ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame.
