@@ -1067,7 +1067,7 @@ async function runUniversalStream(
           : "- You have NO search capability of your own — no Google, no databases, no registries, no archives. The searches listed in the LIVE WEB SEARCH RESULTS block are the ONLY searches that were run, by the research system, on your behalf.";
         prompt = `${block}\n\n---\n\n${prompt}\n\nGROUNDING RULES (mandatory):
 ${noOwnSearch}
-- NEVER claim to have searched, queried, or checked any engine, database, or source yourself. If your report includes a methodology section, it must describe exactly the queries listed above and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
+- Never describe a search you did not actually run. The LIVE WEB SEARCH RESULTS block lists the searches the research system ran for you; if you have a web search tool of your own, searches you run with it are yours to report, by their exact query. A methodology section describes exactly those searches and what they returned — nothing else. Do NOT invent a null ("no coverage", "no results") for a search that was never run.
 - Ground every time-sensitive claim in the numbered results and cite them inline with their URLs. Where the results do not cover a point, write "the provided live results do not cover this" — do not fill the gap with memorized training data presented as current.
 - Result dates may differ from your stated date by up to a day due to timezones. That is normal publishing skew, not an anomaly — do not build theories on it.`;
         onGrounding?.({ mode: "injected", detail: `${hitCount} live search results + ${pages} full-page extracts injected via ${engine} across ${waves} search wave${waves === 1 ? "" : "s"} — seed queries: ${queries.map((q) => `"${q.slice(0, 60)}"`).join(" | ")}` });
@@ -2024,9 +2024,9 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
         if (critiquesContext) {
           critiquesBlock = `\n\nRED TEAM CRITIQUES:\nThe following adversarial cross-examinations were produced by VEX, Chief Adversarial Officer, who ruthlessly stress-tested each specialist report. Each critique flags weak evidence, blind spots, counter-evidence, and a confidence verdict (High/Medium/Low).\n\n${critiquesContext}`;
           critiqueDirective = `\n\n## 4.5 Red Team Findings & Rebuttals
-- The swarm was subjected to an adversarial red-team review by VEX. Address EVERY material critique raised above.
-- For each critique, either (a) rebut it with specific evidence drawn from the specialist reports, or (b) concede it and explicitly adjust the affected conclusions elsewhere in this synthesis.
-- Do NOT ignore any LOW-confidence verdict: where a specialist report was rated Low reliability, state plainly how that constrains the overall confidence of this synthesis.`;
+- VEX reviewed each specialist report WITHOUT web access. Critiques are internal consistency checks on the evidence as written — they are not new evidence and do not outrank a sourced finding.
+- Address each material critique in one of three ways: (a) rebut it with specific evidence from the specialist reports; (b) concede it and adjust the affected conclusions elsewhere in this synthesis; or (c) note that it raises a question this sweep did not test, and carry it into the follow-up recommendations. A critique with no evidence behind it earns (c), not a concession.
+- Where VEX rated a specialist report Low reliability, state plainly how that bounds the confidence of the conclusions that depend on it.`;
         }
       }
 
@@ -2118,7 +2118,9 @@ ${fringe
 - The OVERARCHING TOPIC above may be a full research directive with its own headers and an authoritative-context block. Those are INSTRUCTIONS to satisfy, not content to reproduce: never copy the directive or the context into this document. Start with the required title header below.
 
 DENSITY MANDATE (mandatory, applies to every structure and depth):
-- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame.
+${fringe
+        ? "- OPEN WITH THE FILE'S STATE: what the evidence currently supports, what it does not, and the strongest open lead — before any background. \"Insufficient to conclude\" is a valid opening. The user's constraints and context CALIBRATE that reading; they are supporting material, never the headline."
+        : "- ANSWER THE PRIMARY QUESTION FIRST: open with the direct answer the user asked for — the pick, the ranking, the verdict — before any background. The user's constraints and technical context CALIBRATE the verdict; they are supporting material, never the headline or the organizing frame."}
 - Carry the specialists' concrete material FORWARD: numbers, dates, names, prices, direct quotes, and source URLs must survive into this synthesis. Never compress a quantified finding into a vague generalization.
 - Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
 - Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
