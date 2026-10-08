@@ -19,7 +19,7 @@ export default defineConfig(() => {
       // When watching is on, never let a server-side or data-file change force a
       // full client reload: server.ts does not hot-reload anyway, and a reload
       // mid-run kills the browser-driven agent loop.
-      watch: process.env.DISABLE_HMR === 'true' ? null : { ignored: ['**/server.ts', '**/runs/**', '**/docs/**', '**/*.md'] },
+      watch: process.env.DISABLE_HMR === 'true' ? null : { ignored: ['**/server.ts', '**/runs/**', '**/docs/**', '**/scripts/**', '**/portraits/**', '**/*.md'] },
     },
   };
 });

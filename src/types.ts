@@ -57,7 +57,13 @@ export interface SwarmConfig {
   // Generate a headshot per agent at assembly (Gemini image model, cached
   // per persona on the server). Default on; false bypasses.
   portraits?: boolean;
+  // Evidence policy — the source rubric, separate from Fringe Mode (which is
+  // the verdict shape). Defaults by the Fringe switch: on → fringe-first,
+  // off → mainstream-first; either can be knocked to any detent after.
+  evidencePolicy?: EvidencePolicy;
 }
+
+export type EvidencePolicy = "mainstream-first" | "parity" | "fringe-first";
 
 // A reusable specialist persona saved by the user. In Roster Mode the
 // orchestrator drafts exclusively from these: identity (id/name/role/color)

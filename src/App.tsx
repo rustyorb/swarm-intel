@@ -63,12 +63,13 @@ import ClaimAtlas from "./components/ClaimAtlas";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import AgentLibrary from "./components/AgentLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, AgentTelemetry, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, StageName, SwarmConfig, sessionTitle } from "./types";
+import { Agent, AgentStatus, AgentTelemetry, AtlasClaim, EvidencePolicy, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, StageName, SwarmConfig, sessionTitle } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
 const CONDITIONER_HEX = "#f59e0b";
 const PORTRAIT_HEX = "#5bb797";
+const POLICY_HEX = "#38bdf8";
 
 // Word floors per depth, used to scale the WRITING stage of the real
 // progress ring (the prompts set 800-1.2k / 2.5-4k / 5-8k word floors).
@@ -407,7 +408,7 @@ function MissionParameters({
       {/* Fringe Mode case-file toggle */}
       <div className={compact ? "mt-3" : "mt-4"}>
         <button
-          onClick={() => onChange({ ...config, fringeMode: !config.fringeMode })}
+          onClick={() => onChange({ ...config, fringeMode: !config.fringeMode, evidencePolicy: !config.fringeMode ? "fringe-first" : "mainstream-first" })}
           className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer"
           title="Case-file mode for fringe/esoteric territory: investigation-native specialists, non-mainstream sourcing, Evidence Docket synthesis with open leads"
         >
@@ -441,6 +442,40 @@ function MissionParameters({
           </span>
         </button>
       </div>
+
+      {/* Evidence Policy — the source rubric, separate from Fringe (the verdict shape) */}
+      {(() => {
+        const policy: EvidencePolicy = config.evidencePolicy ?? (config.fringeMode ? "fringe-first" : "mainstream-first");
+        const detents: { id: EvidencePolicy; label: string; hint: string }[] = [
+          { id: "mainstream-first", label: "Mainstream", hint: "Institutional records and press are the spine; archives and practitioner material corroborate." },
+          { id: "parity", label: "Parity", hint: "Institutional, press, archival and practitioner sources carry equal standing; convergence across lanes decides." },
+          { id: "fringe-first", label: "Fringe-first", hint: "Archives, primary documents, practitioner communities and original-era press are the spine; press summaries are context." },
+        ];
+        return (
+          <div className={compact ? "mt-3" : "mt-4"}>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[9px] font-mono uppercase tracking-widest font-bold text-text-muted">Evidence Policy</span>
+              {!compact && <span className="text-[8px] font-mono text-text-muted">chain of custody is the only score</span>}
+            </div>
+            <div className="flex items-center gap-1 bg-bg-surface border border-border-warm rounded-lg p-0.5">
+              {detents.map((d) => {
+                const active = policy === d.id;
+                return (
+                  <button
+                    key={d.id}
+                    onClick={() => onChange({ ...config, evidencePolicy: d.id })}
+                    className={`flex-1 px-2 py-1.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded-md transition-all cursor-pointer ${active ? "" : "text-text-muted hover:text-text-secondary"}`}
+                    style={active ? { color: POLICY_HEX, background: "var(--color-bg-primary)", border: `1px solid ${POLICY_HEX}66` } : undefined}
+                    title={d.hint}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Red Team adversarial toggle */}
       <div className={compact ? "mt-3" : "mt-4"}>
@@ -575,7 +610,11 @@ const DEFAULT_SETTINGS = {
     synthesis: { provider: "gemini", model: "gemini-3.5-flash" },
     // Agent Forge: writes reusable personas for the Agent Library.
     forge: { provider: "gemini", model: "gemini-3.5-flash" },
-  }
+  },
+  // Standing instructions from the user, injected above every rubric in
+  // every prompt (conditioner, orchestrator, agents, synthesis, VEX,
+  // interrogation). They outrank the defaults.
+  operatorDirectives: "",
 };
 
 // Hydrate persisted state synchronously in useState initializers. Loading via
@@ -805,6 +844,7 @@ export default function App() {
           ...(parsed.rosterMode === true ? { rosterMode: true } : {}),
           conditionDirective: parsed.conditionDirective !== false,
           portraits: parsed.portraits !== false,
+          ...(["mainstream-first", "parity", "fringe-first"].includes(parsed.evidencePolicy) ? { evidencePolicy: parsed.evidencePolicy as EvidencePolicy } : {}),
         };
       }
     } catch (e) {
@@ -2125,7 +2165,7 @@ export default function App() {
             <h1 className="text-lg font-semibold tracking-tight text-text-primary flex items-center gap-2">
               SWARM<span className="text-accent-warm">_INTEL</span>
               <span className="text-[10px] bg-bg-primary border border-border-warm text-text-secondary px-2 py-0.5 rounded-full uppercase tracking-wider font-mono font-medium">
-                v3.3.1
+                v3.4.0
               </span>
             </h1>
             <p className="text-[10px] text-text-muted font-mono -mt-0.5">Multi-Agent Intelligence Network</p>
@@ -4241,6 +4281,29 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="space-y-6">
+                    {/* Operator Directives — the user's standing instructions, above every rubric */}
+                    <div className="p-4 rounded-xl border bg-bg-primary/20 space-y-2.5" style={{ borderColor: `${POLICY_HEX}55` }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs font-bold block font-display" style={{ color: POLICY_HEX }}>
+                          Operator Directives
+                        </span>
+                        <span className="text-[9px] font-mono text-text-muted">
+                          {(settings.operatorDirectives || "").trim().length ? `${(settings.operatorDirectives || "").trim().split(/\s+/).length} words · live on every prompt` : "empty"}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-text-secondary leading-relaxed">
+                        Standing instructions from you. Injected above the rubric in every prompt — directive conditioner, orchestrator, every agent, synthesis, VEX, interrogation — and stated to outrank the defaults. Write the arguments you keep having with it, once.
+                      </p>
+                      <textarea
+                        value={settings.operatorDirectives || ""}
+                        onChange={(e) => setSettings(prev => ({ ...prev, operatorDirectives: e.target.value }))}
+                        rows={5}
+                        placeholder={"e.g.\n- Never hedge a traced artifact with \"experts dismiss\". Say what the artifact shows and what contradicts it.\n- Score forums and practitioner archives by chain of custody, same as any filing.\n- When a claim has no artifact, say \"no artifact located\", not \"unfounded\"."}
+                        className="w-full resize-y bg-bg-primary border border-border-warm rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-muted focus:outline-none font-mono leading-relaxed"
+                        style={{ minHeight: 110 }}
+                      />
+                    </div>
+
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider font-mono text-text-primary mb-3">
                         Specialist Swarm Workload Routing

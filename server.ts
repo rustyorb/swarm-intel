@@ -511,7 +511,12 @@ const FULL_PAGE_EXTRACT_COUNT = 10;
 async function gatherLiveContext(
   queries: string[],
   refine?: (digest: string, alreadyRun: string[]) => Promise<string[]>,
-  onStage?: (s: StageInfo) => void
+  onStage?: (s: StageInfo) => void,
+  // The news-category doubling was a junk-filter fix for SearXNG's general
+  // category. Under a fringe-first evidence policy it is OFF: the server must
+  // not inject mainstream press on every wave while the prompt asks for
+  // archives and practitioner lanes. Search mix is code, not a sentence.
+  newsLane: boolean = true
 ): Promise<{ block: string; hitCount: number; engine: string; pages: number; waves: number }> {
   const uniqueQueries = [...new Set(queries.map((q) => q.trim()).filter(Boolean))].slice(0, 10);
 
@@ -519,10 +524,12 @@ async function gatherLiveContext(
     {
       name: "SearXNG",
       enabled: true,
-      jobsFor: (qs) => qs.flatMap((q) => [
-        { query: q, run: () => searxngSearch(q, 10) },
-        { query: q, run: () => searxngSearch(q, 10, "news") },
-      ]),
+      jobsFor: (qs) => qs.flatMap((q) => newsLane
+        ? [
+            { query: q, run: () => searxngSearch(q, 10) },
+            { query: q, run: () => searxngSearch(q, 10, "news") },
+          ]
+        : [{ query: q, run: () => searxngSearch(q, 10) }]),
     },
     {
       // Brave's free tier allows one request per second; firing a wave in
@@ -750,11 +757,57 @@ FOLLOW-UP DIRECTIVE FROM THE USER: "${directive}"`;
 // ONLY the directive; the server appends the user's input verbatim, so
 // nothing the user wrote can be shortened or lost.
 
+// -------------------------------------------------------------
+// Evidence Policy — the source rubric, separate from Fringe Mode
+// -------------------------------------------------------------
+// Fringe Mode is a verdict shape (Evidence Docket, open leads, provenance
+// tags). Evidence policy is the source religion: which lanes are the spine
+// and how a source earns credibility. They were welded together once and the
+// institutional rubric outvoted the fringe costume. The only credibility axis
+// anywhere in the pipeline is now CHAIN OF CUSTODY.
+type EvidencePolicy = "mainstream-first" | "parity" | "fringe-first";
+
+const normalizePolicy = (v: any, fringe: boolean): EvidencePolicy =>
+  v === "mainstream-first" || v === "parity" || v === "fringe-first" ? v : fringe ? "fringe-first" : "mainstream-first";
+
+const POLICY_LABEL: Record<EvidencePolicy, string> = {
+  "mainstream-first": "MAINSTREAM-FIRST",
+  parity: "PARITY",
+  "fringe-first": "FRINGE-FIRST",
+};
+
+const CUSTODY_SCALE = `CHAIN-OF-CUSTODY SCORING (the only credibility axis, 0-10): 10 = you read the primary artifact itself (the filing, the scan, the original post, the dataset, the recording) at a resolvable location; 7-9 = a faithful copy or transcript whose original is identified and could be opened; 4-6 = a secondary account that names its primary source; 1-3 = a claim with no artifact behind it. Who published it is context you may note, never the score. Never label a source unreliable from memory; score what you actually traced. A traced artifact that CONTRADICTS a claim is a finding — record it as such.`;
+
+function EVIDENCE_POLICY_BLOCK(policy: EvidencePolicy): string {
+  const spine =
+    policy === "fringe-first"
+      ? `SPINE: archival and FOIA reading rooms, primary documents (patents, filings, court records, contracts, datasets), practitioner and researcher communities (forums, Discords, mailing lists, Substacks, podcasts, out-of-print books and scans), and original-era press are the backbone of this investigation. Mainstream summaries are context and are NOT required for a finding to stand. A finding supported by a traced community artifact outranks an untraced institutional summary. "The source is a forum" is never a defect; "the claim has no artifact" is.`
+      : policy === "parity"
+      ? `SPINE: institutional, press, archival, and practitioner sources carry EQUAL standing. A claim is strong when independent lanes converge on it and weak when one lane echoes itself — regardless of which lane. Do not discount a practitioner artifact for being a practitioner artifact, and do not promote a press summary for being press.`
+      : `SPINE: institutional records and established press are the backbone; archival and practitioner material corroborates and extends them. Even here, credibility is chain of custody, not masthead: a press summary with no traceable primary scores below a scanned filing.`;
+  return `EVIDENCE POLICY — ${POLICY_LABEL[policy]} (set by the user for this run).
+The user owns the evidence policy. Apply it. Do not substitute your own judgment about which sources deserve weight.
+${spine}
+${CUSTODY_SCALE}
+Stamp every report section that scores sources with "scored under ${POLICY_LABEL[policy]}".`;
+}
+
+function OPERATOR_DIRECTIVES_BLOCK(settings: any): string {
+  const text = String(settings?.operatorDirectives || "").trim();
+  if (!text) return "";
+  return `OPERATOR DIRECTIVES (standing instructions from the user — they outrank every default rule that follows):
+${text.slice(0, 4000)}
+
+`;
+}
+
 interface ConditionerConfig {
   depth: "recon" | "standard" | "deep";
   fringe: boolean;
   redTeam: boolean;
   agentCount: number | "auto";
+  policy: EvidencePolicy;
+  operatorDirectives?: string;
 }
 
 const CONDITIONER_MAX_INPUT_WORDS = 12000;
@@ -784,6 +837,8 @@ function buildConditionerPrompt(rawTopic: string, cfg: ConditionerConfig): strin
     : "The synthesis opens with the direct answer to the primary question (the pick, the ranking, the verdict, the design). The success condition must say what that answer looks like.";
 
   return `Today's date is ${new Date().toDateString()}.
+
+${OPERATOR_DIRECTIVES_BLOCK({ operatorDirectives: cfg.operatorDirectives })}${EVIDENCE_POLICY_BLOCK(cfg.policy)}
 
 THE PIPELINE THIS DIRECTIVE WILL DRIVE (write for this machine, not for a chatbot):
 - An orchestrator reads the directive, writes a need analysis, and sprouts ${cfg.agentCount === "auto" ? "3-9" : cfg.agentCount} specialist agents from it. Each agent runs SEQUENTIALLY and writes a ${agentFloors}-word report (depth: ${cfg.depth.toUpperCase()}).
@@ -828,6 +883,7 @@ When agents should use live web search and when they should rely on the authorit
 What a passing synthesis looks like, in the requester's own terms: three to six bullet points that could be checked against the final document.
 
 RULES:
+- THE EVIDENCE POLICY ABOVE GOVERNS EVERY SECTION YOU WRITE. The epistemic categories, failure modes, research behaviour and success condition must all score sources by chain of custody, never by who published them. One failure mode is FORBIDDEN: "the source is an anonymous forum / community site / blog" is NOT slippage and must not appear as a failure signal. Slippage is a claim with no artifact behind it. Provenance tags describe chain of custody, not permission to use: a [community lore] or [witness testimony] item with a recoverable original is evidence and may be a building block. Never write that any tag "never forms a building block" or similar.
 - NO QUOTAS ON FINDINGS. Never set a numeric floor on what the research must find ("at least 10 individuals", "no fewer than 5 patents", "minimum 3 labs"). Quotas on evidence invite fabrication. Floors apply only to STRUCTURE: every deliverable present, every claim tagged, every gap registered as an open question. A deliverable's content line says what it must contain, never how many.
 - Use only the epistemic tags you defined in REQUIRED EPISTEMIC SEPARATION; do not introduce new ones elsewhere in the directive.
 - Write in English throughout.
@@ -964,7 +1020,8 @@ async function planSearchQueries(
   topic: string,
   angle: string,
   fringe: boolean,
-  settings: any
+  settings: any,
+  policy: EvidencePolicy = "mainstream-first"
 ): Promise<string[]> {
   try {
     const schema = {
@@ -986,7 +1043,9 @@ Generate 4-6 concrete web search queries for this investigation. Rules:
 - Each query is a tight search-engine string (2-8 words), not a sentence or a question.
 - Queries must not overlap heavily with each other.
 - COVER DISTINCT ANGLES, not just topical restatements. Across the set, include at least one query hunting CRITIQUE / rebuttal / debate / counter-evidence on the central claim, and at least one probing INCENTIVE — who funds, profits from, or is harmed by the dominant position.${fringe ? `
-- This is a FRINGE case-file investigation. THINK LIKE A VETERAN FRINGE RESEARCHER: draw on your knowledge of the esoteric/occult canon (Sumerian, Hermetic, alchemical, Thelemic, modern conspiracy-research literature), known symbol and codename lineages, classified-program insignia lore, and famous prior cases in this territory. Name the canonical anchors — specific facilities, program names, texts, researchers, incidents — that a fringe veteran would immediately check for this mandate.
+- This is a FRINGE case-file investigation. THINK LIKE A VETERAN FRINGE RESEARCHER: draw on your knowledge of the esoteric/occult canon (Sumerian, Hermetic, alchemical, Thelemic, modern conspiracy-research literature), known symbol and codename lineages, classified-program insignia lore, and famous prior cases in this territory. Name the canonical anchors — specific facilities, program names, texts, researchers, incidents — that a fringe veteran would immediately check for this mandate.` : ""}${policy === "fringe-first" ? `
+- EVIDENCE POLICY FRINGE-FIRST — the user owns this policy; apply it. The set MUST cover these lanes, one query each at minimum: (a) an archive / reading-room lane (site:archive.org, a FOIA reading room, a national archive, a court docket); (b) a primary-document lane (patent number, contract or grant identifier, filing, dataset); (c) a practitioner-community lane (a named forum, Discord, mailing list, Substack, podcast, or community wiki where the subject's people actually talk); (d) an original-era press or publication lane (the period's own newspapers, newsletters, zines, journals). Mainstream news summaries are NOT required.` : policy === "parity" ? `
+- EVIDENCE POLICY PARITY — the user owns this policy; apply it. Cover BOTH institutional/press lanes AND archival + practitioner-community lanes (a named forum, Discord, mailing list, Substack or community wiki) with equal weight across the set.` : fringe ? `
 - Include one query using site:archive.org and one aimed at declassified/FOIA material where relevant.` : ""}`;
 
     const result = await generateUnifiedJSON(
@@ -1118,7 +1177,9 @@ async function runUniversalStream(
   // this; interrogation answers stay single-wave for responsiveness.
   deepenSearch?: boolean,
   // Real stage telemetry (searching / reading / reasoning / writing).
-  onStage?: (s: StageInfo) => void
+  onStage?: (s: StageInfo) => void,
+  // Per-run evidence policy; controls the search mix in code.
+  streamOpts?: { evidencePolicy?: EvidencePolicy }
 ): Promise<{ truncated: boolean; degenerate: boolean }> {
   let truncated = false;
   let degenerate = false;
@@ -1160,7 +1221,9 @@ async function runUniversalStream(
       const refiner = deepenSearch
         ? (digest: string, alreadyRun: string[]) => refineQueriesFromResults(settings, digest, alreadyRun)
         : undefined;
-      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner, onStage);
+      const newsLane = streamOpts?.evidencePolicy !== "fringe-first";
+      console.log(`[Grounding] evidence policy ${streamOpts?.evidencePolicy || "mainstream-first"} — news lane ${newsLane ? "ON" : "OFF"}`);
+      const { block, hitCount, engine, pages, waves } = await gatherLiveContext(queries, refiner, onStage, newsLane);
       if (hitCount > 0) {
         const noOwnSearch = NATIVE_SEARCH_PROVIDERS.has(provider)
           ? "- Your provider may weave additional live web results into this run; those plus the LIVE WEB SEARCH RESULTS block above are your ONLY live sources."
@@ -1534,6 +1597,8 @@ async function startServer() {
       // already carry a directive and prior context). Default ON; the
       // client sends conditionDirective: false to bypass.
       const rawTopic = String(topic);
+      // Evidence policy: separate from Fringe Mode; defaults by it when unset.
+      const policy = normalizePolicy(config?.evidencePolicy, fringe);
       const wantsConditioning = !priorBlock && !(config && config.conditionDirective === false);
       let effectiveTopic = rawTopic;
       let conditioned: string | null = null;
@@ -1543,6 +1608,8 @@ async function startServer() {
           fringe,
           redTeam: !!(config && config.redTeam),
           agentCount: pinnedCount ?? "auto",
+          policy,
+          operatorDirectives: settings?.operatorDirectives,
         });
         if (directive) {
           conditioned = assembleConditionedTopic(directive, rawTopic);
@@ -1569,6 +1636,9 @@ async function startServer() {
         const rosterPrompt = `Today's date is ${today2}.
 
 RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming2}
+
+${OPERATOR_DIRECTIVES_BLOCK(settings)}${EVIDENCE_POLICY_BLOCK(policy)}
+Draft members whose standing specialties can actually work the lanes this policy names.
 
 ROSTER MODE: You must draft the team EXCLUSIVELY from the user's saved Agent Library below. You may NOT invent new agents, rename anyone, or alter identities — selection and per-mission tasking only.
 
@@ -1676,6 +1746,9 @@ Select ${pinnedCount ? `exactly ${Math.min(pinnedCount, maxPick)}` : `between 2 
       const prompt = `Today's date is ${today}.
 
 RESEARCH REQUEST: "${effectiveTopic}"${followUpFraming}
+
+${OPERATOR_DIRECTIVES_BLOCK(settings)}${EVIDENCE_POLICY_BLOCK(policy)}
+Sprout specialists who can actually work the lanes this policy names.
 
 Work in two phases.
 
@@ -1917,6 +1990,8 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       // Baseline search strings come from the user's short topic, never from
       // a conditioned directive whose first 160 chars are a title line.
       const queryTopic: string = typeof rawTopic === "string" && rawTopic.trim() ? rawTopic.trim() : String(topic);
+      // Evidence policy governs the rubric in the prompt AND the search mix.
+      const policy = normalizePolicy(config?.evidencePolicy, !!(config && config.fringeMode));
 
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
@@ -1938,7 +2013,7 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       const citationRules = `SOURCE RULES: Ground your findings in live web sources retrieved during this investigation and cite them inline (source name + URL). If a point cannot be verified against live sources, explicitly mark it as unverified model knowledge. Absence from your training data is NEVER evidence of absence — do not declare a subject nonexistent or "without evidence" unless live search actually returned nothing relevant, and even then write "live search returned no coverage of this" rather than asserting it does not exist.
 
 EVIDENCE DISCIPLINE (mandatory):
-- SCORE YOUR SOURCES inline on a 0-10 credibility scale (10 = official records, primary documents, peer-reviewed; 8-9 = credentialed experts, institutional sources; 5-7 = reputable journalism, cited technical writing; 3-4 = uncited claims, opinion; 0-2 = known-unreliable or contradicted by primary evidence). Write it inline with the FULL URL, e.g. "(Reuters, https://www.reuters.com/world/example-article, 8/10)" — a bare domain is not a citation; every cited source needs a resolvable link.
+- SCORE YOUR SOURCES inline by CHAIN OF CUSTODY on the 0-10 scale defined in the EVIDENCE POLICY above (10 = you read the primary artifact at a resolvable location … 1-3 = a claim with no artifact behind it). Who published it is context, never the score. Write it inline with the FULL URL, e.g. "(Allan Memorial billing ledger scan, https://archive.org/details/example, 9/10)" — a bare domain is not a citation; every cited source needs a resolvable link.
 - TRIANGULATE: a claim confirmed by independent sources is stronger than one echoed by sources citing each other. State which you have, and flag single-source claims as single-source.
 - SEEK CONTRADICTION: actively report evidence cutting AGAINST your own emerging conclusion. A report with no counter-evidence is incomplete.
 - FOLLOW THE INCENTIVE: where a claim is contested, note who funds, profits from, or is harmed by each position.
@@ -2008,7 +2083,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       if (fringe) {
         prompt = `${prompt}\n\n${FRINGE_AGENT_RULES}`;
       }
-      prompt = `${datePreamble}\n\n${prompt}\n\n${citationRules}`;
+      prompt = `${OPERATOR_DIRECTIVES_BLOCK(settings)}${EVIDENCE_POLICY_BLOCK(policy)}\n\n${datePreamble}\n\n${prompt}\n\n${citationRules}`;
 
       // Queries for the injected-grounding fallback (providers without native
       // web search); native-search providers run their own queries instead.
@@ -2034,7 +2109,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       // orchestrator-model call). Keep one raw-topic query as a baseline;
       // fall back to the naive set entirely if planning fails.
       res.write(`data: ${JSON.stringify({ type: "stage", stage: "planning" })}\n\n`);
-      const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings);
+      const planned = await planSearchQueries(String(topic), String(agent.investigativeAngle || ""), fringe, settings, policy);
       // Exact-phrase and de-glued variants of the topic ride along regardless
       // of planner quality — a niche identifier must always get a direct hunt.
       const topicVariants = buildQueryVariants(queryTopic);
@@ -2068,7 +2143,8 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
             res.write(`data: ${JSON.stringify({ type: "grounding", mode: info.mode, detail: info.detail })}\n\n`);
           },
           true,
-          (s) => res.write(`data: ${JSON.stringify({ type: "stage", ...s })}\n\n`)
+          (s) => res.write(`data: ${JSON.stringify({ type: "stage", ...s })}\n\n`),
+          { evidencePolicy: policy }
         );
 
         clearInterval(pingInterval);
@@ -2112,6 +2188,7 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
       const depth = config && config.depth ? config.depth : "standard";
       const fringe = !!(config && config.fringeMode);
       const delta = !!(priorContext && priorContext.delta);
+      const policy = normalizePolicy(config?.evidencePolicy, fringe);
 
       console.log(`Synthesizing ${reports.length} reports for topic: "${title.slice(0, 120)}" via SSE [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
@@ -2230,7 +2307,9 @@ Be exhaustive, verbose, informative, and write in your persona. Aim for AT LEAST
 
       const structureWithCatalytic = `${structureBody}${catalyticDirective}`;
 
-      const prompt = `OVERARCHING TOPIC: "${topic}"
+      const prompt = `${OPERATOR_DIRECTIVES_BLOCK(settings)}${EVIDENCE_POLICY_BLOCK(policy)}
+
+OVERARCHING TOPIC: "${topic}"
 
 You are the Lead Swarm Orchestrator. ${fringe
         ? "Your mission is to consolidate the following case-file investigations into a single Evidence Docket. This is an accumulating investigation, not an adjudication: your job is to organize the file, surface its patterns, and keep the case honest — not to force a verdict."
@@ -2259,7 +2338,7 @@ ${fringe
 - Organize insights by theme; under each theme, weave together what multiple specialists found and quote their strongest evidence directly.
 - Document contradictions verbatim and preserve uncertainty explicitly. Treat significant ABSENCES — what no specialist could find — as findings in their own right, stated plainly.
 - NEGATIVE-EXISTENCE DISCIPLINE: never assert that a system, program, name, or acronym "does not exist" or "has no known use" unless the specialist reports show a DEDICATED verification sweep (multiple query variants, acronym expansions, alternate spellings) that came back empty. Anything less MUST be phrased as "not found in this sweep" and emitted as a follow-up thread. Absence of evidence in a limited search is never evidence of absence.
-- Append a final section titled "## Source Ledger": every distinct source cited anywhere in the specialist reports, organized into credibility tiers (High 8-10 / Medium 5-7 / Low 1-4), each entry with its URL, a trust score, and one line on what it supports or contradicts.${depthDirective}`;
+- Append a final section titled "## Source Ledger (scored under ${POLICY_LABEL[policy]})": every distinct source cited anywhere in the specialist reports, organized by CHAIN OF CUSTODY (Artifact in hand 8-10 / Faithful copy or named primary 4-7 / No artifact 1-3), each entry with its URL, its custody score, and one line on what it supports or contradicts. Never tier by publisher.${depthDirective}`;
 
       const pingInterval = setInterval(() => {
         res.write(`data: ${JSON.stringify({ type: "ping" })}\n\n`);
@@ -2600,6 +2679,8 @@ Return 3-12 leads total.`;
     try {
       const { topic, agent, report: rawReport, settings, config } = req.body;
       const report = typeof rawReport === "string" ? sanitizeReport(rawReport) : rawReport;
+      const rtPolicy = normalizePolicy(config?.evidencePolicy, !!(config && config.fringeMode));
+      const rtPrefix = `${OPERATOR_DIRECTIVES_BLOCK(settings)}${EVIDENCE_POLICY_BLOCK(rtPolicy)}\nAudit against THIS policy: a traced practitioner artifact is not a weakness, and an untraced institutional summary is not a strength.\n\n`;
       if (!topic || !agent || !report) {
         return res.status(400).json({ error: "Topic, agent, and report are required for a red team review." });
       }
@@ -2618,7 +2699,7 @@ Return 3-12 leads total.`;
         : "You are VEX, Chief Adversarial Officer — a ruthless, brilliant red-team analyst. You exist to stress-test intelligence, never to flatter it. You are sharp, specific, and unsparing, but intellectually honest: your objective is to make the final synthesis stronger by exposing every weakness in the specialist's work.";
 
       const prompt = fringe
-        ? `OVERARCHING TOPIC: "${topic}"
+        ? `${rtPrefix}OVERARCHING TOPIC: "${topic}"
 
 You are auditing a case-file report submitted by ${agent.name}, a ${agent.role}.
 Their assigned investigative angle was: "${agent.investigativeAngle || "n/a"}".
@@ -2641,7 +2722,7 @@ Identify which specific pieces of evidence the report's overall picture depends 
 State an overall file-integrity verdict of exactly HIGH, MEDIUM, or LOW, followed by a single-sentence justification. Use this exact format: "**Verdict: MEDIUM** — <one-line justification>".
 
 Keep the whole audit tight and high-signal: roughly 400-700 words. Write as VEX, in the first person, with the tone of a scrupulous case supervisor.`
-        : `OVERARCHING TOPIC: "${topic}"
+        : `${rtPrefix}OVERARCHING TOPIC: "${topic}"
 
 You are cross-examining a specialist report submitted by ${agent.name}, a ${agent.role}.
 Their assigned investigative angle was: "${agent.investigativeAngle || "n/a"}".
@@ -2853,7 +2934,7 @@ Every claim needs at least one supporter or disputer. Cover the breadth of the r
       if (isPanel) {
         taskRole = "synthesis";
         systemInstruction = "You are the Swarm Intelligence panel — the collective voice of the specialist agents plus the lead orchestrator who synthesized their findings. You answer follow-up interrogations strictly from the intelligence already gathered, never from outside knowledge.";
-        prompt = `TOPIC: "${topic}"
+        prompt = `${OPERATOR_DIRECTIVES_BLOCK(settings)}TOPIC: "${topic}"
 
 A user is interrogating the swarm with a follow-up question. The intelligence dossier below is your primary source. If LIVE WEB SEARCH RESULTS were provided above, use them to VERIFY, UPDATE, or CHALLENGE the dossier where the question calls for it — and ALWAYS label which statements come from the dossier versus the live check.
 
@@ -2871,7 +2952,7 @@ RESPONSE REQUIREMENTS:
         const name = targetAgent?.name || "Specialist";
         const role = targetAgent?.role || "Investigator";
         systemInstruction = `You are ${name}, an expert ${role} who investigated this topic as part of a research swarm. You are being interrogated directly about your findings. Stay fully in persona and answer only from the intelligence you gathered.`;
-        prompt = `TOPIC: "${topic}"
+        prompt = `${OPERATOR_DIRECTIVES_BLOCK(settings)}TOPIC: "${topic}"
 
 A user is interrogating you directly about your investigation. Stay fully in persona: answer in the FIRST PERSON, in your own voice and expertise as a ${role}. Your own report is your primary source and the synthesis is shared context. If LIVE WEB SEARCH RESULTS were provided above, use them to VERIFY, UPDATE, or CHALLENGE your own findings where the question calls for it — and ALWAYS label which statements come from your report versus the live check. Do not invent facts beyond these sources.
 
@@ -2966,7 +3047,7 @@ RESPONSE REQUIREMENTS:
 
       const systemInstruction = `You are ${speaker.name}, an expert ${speaker.role}, debating fellow specialists in the War Room. You argue YOUR evidence-based position with conviction and intellectual honesty: you rebut specifics, concede weak points plainly, and never invent facts beyond the intelligence you gathered.`;
 
-      const prompt = `TOPIC: "${topic}"
+      const prompt = `${OPERATOR_DIRECTIVES_BLOCK(settings)}TOPIC: "${topic}"
 
 CONTESTED QUESTION ON THE FLOOR: "${question}"
 
