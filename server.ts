@@ -732,6 +732,9 @@ interface ConditionerConfig {
 
 const CONDITIONER_MAX_INPUT_WORDS = 12000;
 const CONDITIONER_MIN_OUTPUT_WORDS = 300;
+// A 2,000-word directive from a reasoning model can take several minutes;
+// the generic JSON-call timeout (180 s) is too short for it.
+const CONDITIONER_TIMEOUT_MS = 480000;
 
 const CONDITIONER_SYSTEM = "You are the Directive Conditioner for a multi-agent research swarm. You turn a research request into a complete, machine-fitted research directive. You structure; you never research, never answer the question, and never restate the user's context back to them.";
 
@@ -818,7 +821,7 @@ async function conditionDirective(rawTopic: string, settings: any, cfg: Conditio
   try {
     await Promise.race([
       runUniversalStream("orchestrator", settings, prompt, CONDITIONER_SYSTEM, false, (t) => { acc += t; }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`conditioner timed out after ${JSON_CALL_TIMEOUT_MS / 1000}s`)), JSON_CALL_TIMEOUT_MS)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`conditioner timed out after ${CONDITIONER_TIMEOUT_MS / 1000}s`)), CONDITIONER_TIMEOUT_MS)),
     ]);
   } catch (err: any) {
     console.warn(`[Conditioner] failed, using raw topic: ${err?.message || err}`);
