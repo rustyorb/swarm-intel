@@ -1188,6 +1188,14 @@ ${noOwnSearch}
 
   if (provider === "anthropic") {
     if (hasSearch) onGrounding?.({ mode: "native", detail: "Anthropic web_search server tool active" });
+    // Claude 5.x thinks by default (Opus can't turn it off) and thinking
+    // tokens plus the web-search tool loop all count against max_tokens.
+    // 16k left Haiku 5.5 forty visible words per report (2026-10-08). Give
+    // streaming requests room: 128k is the output cap on these models.
+    const anthropicMaxTokens = taskRole === "synthesis" ? 128000 : taskRole === "agent" ? 64000 : 16000;
+    // Opus/Sonnet 4.6+ take the dynamic-filtering web search tool; Haiku and
+    // older models keep the basic variant.
+    const webSearchType = /claude-(opus|sonnet)-(4-[6-9]|5)/.test(model) ? "web_search_20260209" : "web_search_20250305";
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -1198,8 +1206,8 @@ ${noOwnSearch}
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: `${systemInstruction}\n\n${prompt}` }],
-        max_tokens: hasSearch ? 16000 : (taskRole === "synthesis" ? 32000 : 8000),
-        ...(hasSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 8 }] } : {}),
+        max_tokens: anthropicMaxTokens,
+        ...(hasSearch ? { tools: [{ type: webSearchType, name: "web_search", max_uses: 8 }] } : {}),
         stream: true
       })
     });
@@ -1813,7 +1821,7 @@ Design ${pinnedCount ? `exactly ${pinnedCount}` : "between 3 and 9 (your call â€
         return res.status(400).json({ error: "Topic, agents list, and agentIdToRegenerate are required." });
       }
 
-      console.log(`Regenerating agent ${agentIdToRegenerate} for topic: "${topic}" with nudge: "${nudge || "none"}"`);
+      console.log(`Regenerating agent ${agentIdToRegenerate} for topic: "${String(topic).slice(0, 120)}" with nudge: "${nudge || "none"}"`);
 
       const otherAgents = agents.filter((a: any) => a.id !== agentIdToRegenerate);
       const otherAgentsContext = otherAgents
@@ -1873,7 +1881,7 @@ Ensure the new agent is distinct and does not replicate the other existing agent
       const delta = !!(priorContext && priorContext.delta);
       const priorBlock = formatPriorContextBlock(priorContext);
 
-      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${topic}" [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
+      console.log(`Running streaming agent investigation: ${agent.name} (${agent.role}) for topic: "${String(topic).slice(0, 120)}" [${depth}${fringe ? ", fringe" : ""}${delta ? ", delta" : ""}]`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -2440,7 +2448,7 @@ Return 3-12 leads total.`;
       }
       const fringe = !!(config && config.fringeMode);
 
-      console.log(`Red Team cross-examination: VEX vs ${agent.name} (${agent.role}) for topic: "${topic}"${fringe ? " [fringe: case audit]" : ""}`);
+      console.log(`Red Team cross-examination: VEX vs ${agent.name} (${agent.role}) for topic: "${String(topic).slice(0, 120)}"${fringe ? " [fringe: case audit]" : ""}`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
@@ -2653,7 +2661,7 @@ Every claim needs at least one supporter or disputer. Cover the breadth of the r
       const isPanel = respondent === "panel";
       const targetAgent = isPanel ? null : agents.find((a: any) => a && a.id === respondent);
 
-      console.log(`Interrogating swarm [${isPanel ? "PANEL" : (targetAgent ? targetAgent.name : respondent)}] for topic: "${topic}"`);
+      console.log(`Interrogating swarm [${isPanel ? "PANEL" : (targetAgent ? targetAgent.name : respondent)}] for topic: "${String(topic).slice(0, 120)}"`);
 
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
