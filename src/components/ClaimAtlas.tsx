@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Network, X, ThumbsUp, ThumbsDown, Link2 } from "lucide-react";
-import { AtlasClaim, ResearchSession } from "../types";
+import { AtlasClaim, ResearchSession, sessionTitle } from "../types";
 
 interface ClaimAtlasProps {
   session: ResearchSession;
@@ -144,7 +144,7 @@ export default function ClaimAtlas({ session, atlas, getAgentColorHex, onClose }
         <div className="flex items-center gap-2 min-w-0">
           <Network className="w-4 h-4 text-accent-warm flex-shrink-0" />
           <h2 className="text-sm font-semibold text-text-primary font-display flex-shrink-0">Claim Atlas</h2>
-          <span className="text-xs text-text-muted font-mono truncate hidden sm:inline">— {session.topic}</span>
+          <span className="text-xs text-text-muted font-mono truncate hidden sm:inline">— {sessionTitle(session)}</span>
           <span className="min-w-4 h-4 px-1 flex items-center justify-center rounded-full bg-accent-warm/15 border border-accent-warm/30 text-accent-warm text-[9px] font-bold flex-shrink-0">
             {atlas.length}
           </span>

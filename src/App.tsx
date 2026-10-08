@@ -62,10 +62,11 @@ import ClaimAtlas from "./components/ClaimAtlas";
 import KnowledgeLibrary from "./components/KnowledgeLibrary";
 import AgentLibrary from "./components/AgentLibrary";
 import { buildDossierHtml } from "./lib/dossier";
-import { Agent, AgentStatus, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig } from "./types";
+import { Agent, AgentStatus, AtlasClaim, Lead, PriorContext, RedTeamCritique, ResearchSession, SavedAgent, SessionStatus, SwarmConfig, sessionTitle } from "./types";
 
 const REDTEAM_HEX = "#ec4899";
 const FRINGE_HEX = "#8b5cf6";
+const CONDITIONER_HEX = "#f59e0b";
 const ROSTER_HEX = "#3b82f6";
 
 // Starter roster seeded into the Agent Library on first run only (when the
@@ -395,6 +396,44 @@ function MissionParameters({
           </span>
         </button>
       </div>
+
+      {/* Directive Conditioner toggle */}
+      <div className={compact ? "mt-3" : "mt-4"}>
+        <button
+          onClick={() => onChange({ ...config, conditionDirective: config.conditionDirective === false })}
+          className="w-full flex items-center justify-between gap-3 bg-bg-surface border border-border-warm hover:border-border-hi-warm rounded-lg px-3 py-2 transition-all cursor-pointer"
+          title="Expand the topic into a full research directive before the swarm launches"
+        >
+          <div className="flex items-center gap-2 min-w-0 text-left">
+            <Sparkles
+              className="w-3.5 h-3.5 flex-shrink-0 transition-colors"
+              style={{ color: config.conditionDirective !== false ? CONDITIONER_HEX : undefined }}
+            />
+            <div className="min-w-0">
+              <div
+                className="text-[9px] font-mono uppercase tracking-widest font-bold transition-colors"
+                style={{ color: config.conditionDirective !== false ? CONDITIONER_HEX : undefined }}
+              >
+                Directive Conditioner
+              </div>
+              {!compact && (
+                <div className="text-[9px] font-mono text-text-muted mt-0.5">
+                  Expand the topic into a full research directive before launch
+                </div>
+              )}
+            </div>
+          </div>
+          <span
+            className={`relative w-9 h-5 rounded-full flex-shrink-0 transition-colors ${config.conditionDirective !== false ? "" : "bg-border-warm"}`}
+            style={config.conditionDirective !== false ? { background: CONDITIONER_HEX } : undefined}
+          >
+            <span
+              className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-primary transition-transform"
+              style={{ transform: config.conditionDirective !== false ? "translateX(16px)" : "translateX(0)" }}
+            />
+          </span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -439,7 +478,10 @@ function loadStoredSession(): ResearchSession | null {
 }
 
 export default function App() {
-  const [topic, setTopic] = useState(() => loadStoredSession()?.topic || "");
+  const [topic, setTopic] = useState(() => {
+    const stored = loadStoredSession();
+    return stored ? sessionTitle(stored) : "";
+  });
   const [session, setSession] = useState<ResearchSession | null>(loadStoredSession);
   const [history, setHistory] = useState<ResearchSession[]>(() => {
     try {
@@ -597,12 +639,13 @@ export default function App() {
           depth: ["recon", "standard", "deep"].includes(parsed.depth) ? parsed.depth : "standard",
           ...(parsed.fringeMode === true ? { fringeMode: true } : {}),
           ...(parsed.rosterMode === true ? { rosterMode: true } : {}),
+          conditionDirective: parsed.conditionDirective !== false,
         };
       }
     } catch (e) {
       // Ignore malformed config
     }
-    return { agentCount: "auto", depth: "standard" };
+    return { agentCount: "auto", depth: "standard", conditionDirective: true };
   });
 
   useEffect(() => {
@@ -692,7 +735,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    const safeTitle = session.topic.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 50);
+    const safeTitle = sessionTitle(session).toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 50);
     link.setAttribute("download", `${safeTitle}_dossier.html`);
     document.body.appendChild(link);
     link.click();
@@ -902,7 +945,7 @@ export default function App() {
     if (activeReportViewerId === "synthesis") {
       return { 
         text: session.synthesizedReport || "", 
-        title: `${session.topic} - Consolidated Synthesis` 
+        title: `${sessionTitle(session)} - Consolidated Synthesis` 
       };
     }
     const agent = session.agents.find(a => a.id === activeReportViewerId);
@@ -1081,6 +1124,7 @@ export default function App() {
     const newSession: ResearchSession = {
       id: "session_" + Date.now(),
       topic: searchTopic,
+      rawTopic: searchTopic,
       timestamp: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       agents: [],
       status: "assembling",
@@ -1126,6 +1170,20 @@ export default function App() {
       }
 
       const data = await response.json();
+
+      // Directive Conditioner result: the conditioned directive becomes the
+      // topic every downstream call sends; rawTopic keeps the short title.
+      const conditioned: string = typeof data.directive === "string" && data.directive.trim() ? data.directive : "";
+      if (conditioned) {
+        const inWords = searchTopic.trim().split(/\s+/).filter(Boolean).length;
+        const outWords = conditioned.split(/\s+/).filter(Boolean).length;
+        addLog("ORCHESTRATOR", `DIRECTIVE CONDITIONER: expanded ${inWords.toLocaleString()} → ${outWords.toLocaleString()} words.`, "system");
+        addLog("ORCHESTRATOR", conditioned, "info");
+        setSession(prev => prev ? { ...prev, topic: conditioned, rawTopic: searchTopic } : null);
+      } else if (!priorContext && swarmConfig.conditionDirective !== false) {
+        addLog("ORCHESTRATOR", "Directive Conditioner fell back to the raw topic (see server log).", "warning");
+      }
+
       const loadedAgents: Agent[] = (data.agents || []).map((ag: any) => ({
         ...ag,
         status: "idle" as AgentStatus
@@ -1196,7 +1254,7 @@ export default function App() {
       .join("\n");
     const prior: PriorContext = {
       parentSessionId: session.id,
-      parentTopic: session.topic,
+      parentTopic: sessionTitle(session),
       directive: directive.trim(),
       synthesis: (session.synthesizedReport || "").slice(0, 18000),
       chatExcerpt,
@@ -1213,14 +1271,14 @@ export default function App() {
   // server prompts into delta mode. No scheduling — user-triggered only.
   const handleDeltaSweep = (watched: ResearchSession) => {
     if (!watched.synthesizedReport) return; // nothing settled to diff against
-    const directive = `Delta sweep as of ${new Date().toDateString()}: what has changed regarding "${watched.topic}" since ${watched.timestamp}? Focus exclusively on new developments, corrections, and anything that confirms or overturns the prior findings.`;
+    const directive = `Delta sweep as of ${new Date().toDateString()}: what has changed regarding "${sessionTitle(watched)}" since ${watched.timestamp}? Focus exclusively on new developments, corrections, and anything that confirms or overturns the prior findings.`;
     const chatExcerpt = (watched.chat ?? [])
       .slice(-12)
       .map(m => `${m.role === "user" ? "USER" : m.respondentName}: ${m.content.slice(0, 800)}`)
       .join("\n");
     const prior: PriorContext = {
       parentSessionId: watched.id,
-      parentTopic: watched.topic,
+      parentTopic: sessionTitle(watched),
       directive,
       synthesis: (watched.synthesizedReport || "").slice(0, 18000),
       chatExcerpt,
@@ -1620,6 +1678,7 @@ export default function App() {
     try {
       const payload = {
         topic: currentSession.topic,
+        rawTopic: currentSession.rawTopic,
         reports: compiledReports.map(r => ({
           agentName: r.name,
           agentRole: r.role,
@@ -2087,8 +2146,8 @@ export default function App() {
                     key={hist.id}
                     onClick={() => {
                       setSession(hist);
-                      setTopic(hist.topic);
-                      addLog("SYSTEM", `Restored historic research swarm for: "${hist.label || hist.topic}"`, "success");
+                      setTopic(sessionTitle(hist));
+                      addLog("SYSTEM", `Restored historic research swarm for: "${hist.label || sessionTitle(hist)}"`, "success");
                     }}
                     className={`w-full text-left p-2.5 rounded border transition-all text-xs flex justify-between items-center gap-2 cursor-pointer ${
                       session?.id === hist.id
@@ -2098,7 +2157,7 @@ export default function App() {
                   >
                     <div className="truncate min-w-0 flex-1">
                       <span className="font-mono text-[9px] text-text-muted block">{hist.timestamp}</span>
-                      <span className="font-medium truncate block">"{hist.label || hist.topic}"</span>
+                      <span className="font-medium truncate block">"{hist.label || sessionTitle(hist)}"</span>
                     </div>
                     <ChevronRight className="w-3 h-3 text-text-muted flex-shrink-0" />
                   </button>
@@ -2240,7 +2299,7 @@ export default function App() {
                       Active Investigation Segment
                     </span>
                     <h2 className="text-base font-bold text-text-primary italic mt-1 leading-relaxed">
-                      "{session.topic}"
+                      "{sessionTitle(session)}"
                     </h2>
                     <div className="flex items-center gap-2 mt-2 flex-wrap">
                       <span className="text-[9px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded-md bg-bg-primary border border-border-warm text-text-muted">
@@ -2327,7 +2386,7 @@ export default function App() {
                         Recruit Specialist
                       </button>
                       <button
-                        onClick={() => handleInitiateResearch(session.topic, session.priorContext)}
+                        onClick={() => handleInitiateResearch(sessionTitle(session), session.priorContext)}
                         className="flex-1 md:flex-initial h-9 px-4 bg-bg-surface hover:bg-bg-primary border border-border-warm text-text-secondary hover:text-text-primary text-[10px] font-bold rounded-lg uppercase tracking-wider font-mono transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                         title="Reroll and regenerate all agents from scratch"
                       >
@@ -2768,7 +2827,7 @@ export default function App() {
 
               <div className="flex flex-col sm:flex-row gap-4 justify-center w-full max-w-xs">
                 <button
-                  onClick={() => handleInitiateResearch(session.topic, session.priorContext)}
+                  onClick={() => handleInitiateResearch(sessionTitle(session), session.priorContext)}
                   className="w-full sm:w-auto px-6 py-3 bg-accent-warm hover:bg-accent-hi-warm text-black text-xs font-bold rounded-xl uppercase tracking-wider font-display shadow-lg shadow-accent-warm/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -3025,7 +3084,7 @@ export default function App() {
                           Unified Intelligence synthesis
                         </div>
                         <h1 className="text-2xl md:text-3xl font-extrabold text-text-primary tracking-tight leading-tight mb-2 font-display">
-                          {session.topic}
+                          {sessionTitle(session)}
                         </h1>
                         <p className="text-xs text-text-muted font-mono">
                           Swarm Report ID: <span className="text-text-secondary">{session.id}</span> • Completed: <span className="text-text-secondary">{session.timestamp}</span>
@@ -3269,9 +3328,9 @@ export default function App() {
           onClose={() => setLibraryOpen(false)}
           onOpenSession={(s) => {
             setSession(s);
-            setTopic(s.topic);
+            setTopic(sessionTitle(s));
             setLibraryOpen(false);
-            addLog("SYSTEM", `Restored historic research swarm for: "${s.label || s.topic}"`, "success");
+            addLog("SYSTEM", `Restored historic research swarm for: "${s.label || sessionTitle(s)}"`, "success");
           }}
           onToggleFavorite={toggleFavorite}
           onRename={renameSession}

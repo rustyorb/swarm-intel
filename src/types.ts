@@ -32,6 +32,11 @@ export interface SwarmConfig {
   // orchestrator selects (never invents) personas. Default on-the-fly
   // generation is untouched when off.
   rosterMode?: boolean;
+  // Directive Conditioner: expand the topic into a full research directive
+  // (primary question, epistemic categories, coverage, failure modes,
+  // deliverables, research behaviour, success condition) before launch. The
+  // user's input is kept verbatim beneath it. Default on; false bypasses.
+  conditionDirective?: boolean;
 }
 
 // A reusable specialist persona saved by the user. In Roster Mode the
@@ -108,6 +113,10 @@ export interface ChatMessage {
 export interface ResearchSession {
   id: string;
   topic: string;
+  // The topic exactly as the user typed it. When the Directive Conditioner
+  // ran, `topic` holds the full conditioned directive (what every pipeline
+  // call sends) and this holds the short original for titles and relaunch.
+  rawTopic?: string;
   timestamp: string;
   // Orchestrator's diagnosis of what the research need requires — the agents
   // are sprouted from this analysis.
@@ -137,3 +146,7 @@ export interface ResearchSession {
   tags?: string[];
   label?: string;
 }
+
+// Display title for a session: the user's original topic when the
+// Directive Conditioner expanded it, else the topic itself.
+export const sessionTitle = (s: { topic: string; rawTopic?: string }): string => s.rawTopic ?? s.topic;

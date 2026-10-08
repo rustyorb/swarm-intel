@@ -20,7 +20,7 @@ import {
   LibraryBig,
   Radar,
 } from "lucide-react";
-import { ResearchSession } from "../types";
+import { ResearchSession, sessionTitle } from "../types";
 import { buildDossierHtml } from "../lib/dossier";
 
 interface KnowledgeLibraryProps {
@@ -67,7 +67,7 @@ function recency(s: ResearchSession): number {
 }
 
 function displayName(s: ResearchSession): string {
-  return s.label || s.topic;
+  return s.label || sessionTitle(s);
 }
 
 // Ordered searchable fields per session — the first field containing the query
@@ -75,7 +75,7 @@ function displayName(s: ResearchSession): string {
 function buildFields(s: ResearchSession): { where: string; text: string }[] {
   const fields: { where: string; text: string }[] = [];
   fields.push({ where: "title", text: displayName(s) });
-  if (s.label && s.label !== s.topic) fields.push({ where: "topic", text: s.topic });
+  if (s.label && s.label !== sessionTitle(s)) fields.push({ where: "topic", text: sessionTitle(s) });
   if (s.tags && s.tags.length) fields.push({ where: "tag", text: s.tags.join(" ") });
   for (const a of s.agents) {
     fields.push({ where: `roster — ${a.name}`, text: `${a.name} ${a.role} ${a.investigativeAngle}` });
