@@ -764,6 +764,7 @@ ${epistemic} One line per category: the label and the rule for using it.
 
 # COVERAGE
 The components, entities, functions, angles or candidates that MUST be addressed, as a bulleted list derived from the request. You may add obvious adjacent items; mark each added one "(added)". Agents are forbidden from skipping any listed item.
+Named programs, people, organizations or documents in this list are SEEDS, not the territory: each is a trailhead the agent starts from, never a boundary it stops at. Phrase named items as "starting from X" and end the section with a mandatory bullet: "BEYOND THE SEEDS: every agent must report what the seeds LED TO that is not on this list — the successor entity, the co-author, the next contract, the name that appears in the same document — and treat an unlisted find as more valuable than a confirmed listed one." A run that only verifies the seeds has failed this section.
 
 # KNOWN FAILURE MODES
 At least ${cfg.depth === "recon" ? 3 : 5} traps specific to THIS topic (not generic research advice), each as a short bold name and one line on how an agent would detect it.
